@@ -1,0 +1,54 @@
+# HyphyLiquid — Strategy configuration
+# Copy to config/settings.yaml and customize. NEVER commit the real one.
+
+# Bankroll and risk (overridable via .env)
+bankroll_usd: 1000
+max_risk_per_trade_pct: 0.01     # 1% = $10
+max_leverage: 10
+max_open_positions: 3
+daily_loss_limit_pct: 0.03       # 3% = $30
+weekly_loss_limit_pct: 0.05      # 5% = $50
+consecutive_loss_halt: 3         # 3 in a row → 24h halt
+drawdown_kill_pct: 0.40          # 40% drawdown → STOP
+
+# Strategy: BTC/ETH cascade counter-trade
+strategy:
+  name: btc_eth_cascade
+  enabled: true
+
+  # Symbols
+  symbols:
+    - BTC
+    - ETH
+
+  # Cascade detection parameters
+  cascade:
+    liquidation_threshold_usd: 100000   # min $ liq event to trigger
+    cascade_window_minutes: 5
+    funding_rate_extreme: 0.001         # 0.1% = extreme
+    oi_divergence_threshold: 0.05       # 5% OI change in window
+
+  # Entry rules
+  entry:
+    direction: counter_trade            # counter-trade the cascade
+    max_slippage_bps: 10
+    order_type: limit
+    time_in_force: ioc                  # immediate-or-cancel
+
+  # Exit rules
+  exit:
+    take_profit_atr_multiple: 2.0
+    stop_loss_atr_multiple: 1.0
+    max_hold_minutes: 60
+
+# Logging
+logging:
+  level: INFO
+  file: logs/hyphyliquid.log
+  max_bytes: 10485760    # 10MB
+  backup_count: 5
+
+# Notifications
+notifications:
+  enabled: false
+  discord_webhook: ${DISCORD_WEBHOOK_URL}
