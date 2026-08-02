@@ -25,12 +25,13 @@ DATA_DIR = PROJECT_ROOT / "data"
 LOOKBACK_DAYS = int(__import__("os").environ.get("HYPERLIQUID_LOOKBACK_DAYS", "30"))
 INTERVAL = "1h"
 SYMBOLS = ["BTC", "ETH"]
+ENV = __import__("os").environ.get("HYPERLIQUID_ENV", "testnet")
 
 
 def main() -> int:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    env = "testnet"  # use testnet for dev — mainnet can be added later
+    env = ENV  # HYPERLIQUID_ENV env var: 'testnet' (default) or 'mainnet'
     print(f"Connecting to {env}...")
     client = HyperliquidClient(env=env)
 
@@ -52,7 +53,7 @@ def main() -> int:
         if df.empty:
             print("  candles: NO DATA")
         else:
-            path = DATA_DIR / f"{symbol.lower()}_candles_{INTERVAL}_{LOOKBACK_DAYS}d.csv"
+            path = DATA_DIR / f"{symbol.lower()}_candles_{INTERVAL}_{LOOKBACK_DAYS}d_{env}.csv"
             df.to_csv(path, index=False)
             close_min = df["close"].min()
             close_max = df["close"].max()
@@ -97,7 +98,7 @@ def main() -> int:
                 .sort_values("timestamp")
                 .reset_index(drop=True)
             )
-            path = DATA_DIR / f"{symbol.lower()}_funding_{LOOKBACK_DAYS}d.csv"
+            path = DATA_DIR / f"{symbol.lower()}_funding_{LOOKBACK_DAYS}d_{env}.csv"
             funding.to_csv(path, index=False)
             avg_rate = funding["funding_rate"].mean()
             print(f"  funding: {len(funding)} rows -> {path.name}")

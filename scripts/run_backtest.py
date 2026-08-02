@@ -26,17 +26,20 @@ SYMBOLS = ["BTC", "ETH"]
 
 
 def _find_data(symbol: str) -> tuple[Path | None, Path | None]:
-    """Prefer the longest lookback available; fall back to 30d, then 7d."""
-    for suffix in ("90d", "30d", "7d"):
-        c = DATA_DIR / f"{symbol.lower()}_candles_1h_{suffix}.csv"
-        f = DATA_DIR / f"{symbol.lower()}_funding_{suffix}.csv"
-        if c.exists() and f.exists():
-            return c, f
+    """Prefer the longest lookback available; mainnet > testnet; fall back to 30, 7."""
+    for env in ("mainnet", "testnet", ""):
+        for suffix in ("90", "30", "7"):
+            c = DATA_DIR / f"{symbol.lower()}_candles_1h_{suffix}d_{env}.csv" if env else \
+                DATA_DIR / f"{symbol.lower()}_candles_1h_{suffix}d.csv"
+            f = DATA_DIR / f"{symbol.lower()}_funding_{suffix}d_{env}.csv" if env else \
+                DATA_DIR / f"{symbol.lower()}_funding_{suffix}d.csv"
+            if c.exists() and f.exists():
+                return c, f
     return None, None
 
 
 def load_data():
-    """Load candles and funding for all symbols (prefers longest lookback)."""
+    """Load candles and funding for all symbols (prefers longest lookback, mainnet > testnet)."""
     candles_by_symbol = {}
     funding_by_symbol = {}
     for symbol in SYMBOLS:

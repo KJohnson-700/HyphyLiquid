@@ -4,6 +4,40 @@
 
 ---
 
+## 2026-08-01 — Testnet vs Mainnet Reality Check (CRITICAL FINDING)
+
+**The testnet backtest was a fiction. Mainnet data is fundamentally different.**
+
+After fetching 90 days of mainnet data, the funding rate distribution is **100-200x smaller and 100x smoother** than testnet:
+- Testnet BTC funding range: -0.296% to +0.704% per hour
+- Mainnet BTC funding range: -0.0027% to +0.0019% per hour
+- The 0.10% / -0.05% testnet thresholds NEVER fire on mainnet
+
+**Mainnet backtest (90d, scale-appropriate thresholds):**
+- Only 32% of 25 sweep configs profitable
+- CoV 1.55 (UNSTABLE)
+- Median return -4.28% (slightly negative)
+- Best config: high=0.0020%, low=-0.0025%, +1.85% return on **6 signals** (not statistically meaningful)
+- Going to lower thresholds (more signals) makes it WORSE — 160 signals = -13%, 2700 signals = -87%
+
+**Implication: the simple "funding extreme = cascade signal" hypothesis is weak on real mainnet data.** The testnet edge was an artifact of synthetic chaotic funding.
+
+**Possible next research directions:**
+1. Use the `premium` column (perp-spot gap) instead of `funding_rate`
+2. Funding RATE OF CHANGE, not level (sudden spike vs. steady-state high)
+3. Volume + funding combined signal
+4. Fetch actual liquidation events from HL API and backtest the price action AROUND them
+5. Regime filter: only trade when ATR > threshold (skip calm markets)
+
+**Code:**
+- `scripts/fetch_historical.py` — `HYPERLIQUID_ENV` env var (testnet | mainnet); filenames now include env suffix
+- `scripts/run_backtest.py` — `_find_data()` prefers mainnet > testnet, longest lookback first
+- `scripts/mainnet_sweep.py` — mainnet-scale parameter sweep (NEW)
+- `scripts/_funding_dist.py` and `scripts/_debug_loader.py` — debugging aids (can be removed)
+- Data: 90d BTC+ETH mainnet, 90d BTC+ETH testnet, 30d BTC+ETH testnet all in `data/`
+
+---
+
 ## 2026-08-01 — 90-day Backtest Pass
 
 - `scripts/fetch_historical.py` — added `import pandas as pd` (NameError fix); pagination walks 20-day chunks to bypass 500-event API cap
