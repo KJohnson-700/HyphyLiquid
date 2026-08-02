@@ -1,7 +1,11 @@
 # HyphyLiquid Research Repost — BTC/ETH Hyperliquid Liquidation Bot
 
 **Date:** 2026-08-01  
-**Purpose:** Preserve the public research sweep for AI editors and constrain future decisions.
+**Purpose:** Preserve the public research sweep for AI editors and constrain future decisions.  
+**Companion vault note:** `C:\Users\AbuBa\Documents\Obsidian Vault\projects\gold-silver-hyperliquid\research\2026-08-01-HYPERLIQUID-BTC-ETH-LIQUIDATION-SWEEP.md`  
+**Companion AI/MCP repost:** `docs/2026-08-01-RESEARCH-REPOST-ai-mcp-codex.md`  
+**Strategy deep-dive:** `C:\Users\AbuBa\Documents\Obsidian Vault\projects\gold-silver-hyperliquid\strategies\liquidation-cascade.md`  
+**Backlinks in vault:** `strategies/liquidation-cascade` · `strategy-log/liquidation-cascade` · `journal/2026-08-01-trades`
 
 ## Canonical decision
 Build one automated BTC/ETH liquidation-cascade counter-trade bot on Hyperliquid. Public research supports the engineering direction but provides no reliable proof of profitability. The edge must be demonstrated with our own event logs, fills, costs, and out-of-sample results.

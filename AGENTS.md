@@ -143,7 +143,11 @@ Build `src/risk.py` in Week 1, before any strategy code. Every other module call
 - **Bankroll < $600 (40% drawdown)** → STOP, re-evaluate with Slim
 - **No orders outside configured trading hours** (or full 24/7 with explicit config)
 - **Reduce-only** on every closing order
+- **Agent (API) wallet for the bot** — master wallet never touches the running process. Approve the API wallet once in the HL UI. The API wallet can trade; it cannot withdraw.
+- **Bracket entry** — every entry has an atomic TP and SL via the SDK bracket primitive, both reduce-only. Use `normalTpSl` for new positions, `positionTpSl` for existing.
+- **128-bit hex client order IDs** prefixed `0x`, recorded in the journal for every order.
 - **Funding rate P&L** tracked hourly (Hyperliquid settles funding every hour, not every 8h as on most CEXes)
+- **Decision recorder** writes every signal decision to `data/decisions_*.jsonl` from week 2 onward, enabling deterministic replay
 - **All trades journaled** to `vault/journal/YYYY-MM-DD-trades.md` (Obsidian) AND `src/journal/trade_journal.py` (code)
 
 ---
@@ -226,16 +230,21 @@ Build `src/risk.py` in Week 1, before any strategy code. Every other module call
 The Obsidian vault at `C:\Users\AbuBa\Documents\Obsidian Vault\projects\gold-silver-hyperliquid\` is the project's memory. **Code lives in the repo, knowledge lives in the vault.** Update both.
 
 Key files:
-- `gold-silver-hyperliquid.md` — vault AI context map (mirror of this file, more detail)
-- `notes/2026-08-01-PIVOT-btc-eth-cascade.md` — pivot rationale (NEW, 2026-08-01)
-- `notes/2026-08-01-DECISION-gs-strategy-build-path.md` — original decision (DEPRECATED, kept for history)
-- `changelog.md` — milestone log
-- `strategy-log/_index.md` — per-strategy performance tracking
-- `journal/_index.md` — live trade journal template
-- `strategies/_index.md` — strategy deep-dives
-- `research/_index.md` — raw research
+- `gold-silver-hyperliquid.md` — vault AI context map (mirror of this file, more detail). Load order: Pillar A strategic → B strategy → C execution.
+- `notes/2026-08-01-PIVOT-btc-eth-cascade.md` — pivot rationale (active, 2026-08-01).
+- `notes/2026-08-01-DECISION-gs-strategy-build-path.md` — original decision (DEPRECATED, kept for history).
+- `changelog.md` — milestone log.
+- `research/_index.md` — raw research. Active:
+  - `research/2026-08-01-HYPERLIQUID-BTC-ETH-LIQUIDATION-SWEEP.md` — public sweep.
+  - `research/2026-08-01-AI-MCP-CODEX-SWEEP-btc-eth-liquidation.md` — AI/MCP/Codex sweep.
+- `strategies/_index.md` — strategy deep-dives. Active:
+  - `strategies/liquidation-cascade.md` — v1, the only strategy in scope.
+- `strategy-log/_index.md` — per-strategy performance tracking template. Active:
+  - `strategy-log/liquidation-cascade.md` — pre-live stub.
+- `journal/_index.md` — live trade journal template. Active:
+  - `journal/2026-08-01-trades.md` — pre-live stub.
 
-The vault is **Obsidian-flavored** with `[[wikilinks]]` and YAML frontmatter. Match the style.
+The vault is **Obsidian-flavored** with `[[wikilinks]]` and YAML frontmatter. Match the style. When adding a new file in any folder, also update that folder's `_index.md` table.
 
 ---
 
@@ -262,3 +271,5 @@ The vault is **Obsidian-flavored** with `[[wikilinks]]` and YAML frontmatter. Ma
 ## 10. Last updated
 
 2026-08-01 — Initial creation, post-recon pivot from gold/silver to BTC/ETH cascade. Scope locked.
+
+2026-08-01 — AI/MCP sweep deltas: agent (API) wallet, bracket entry, 128-bit hex client order IDs, decision recorder (`data/decisions_*.jsonl`), WebSocket 4-channel pattern. No LLM in trade loop in v1. See `docs/2026-08-01-RESEARCH-REPOST-ai-mcp-codex.md`.

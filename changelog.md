@@ -4,6 +4,25 @@
 
 ---
 
+## 2026-08-01 (late session) — status.py progress bar + SDK reinstall
+
+Added a `BACKTEST READINESS` section to `scripts/status.py` so the user can see how close we are to the auto-backtest guard (100 events AND 24h old) at a glance.
+
+**What you see now**
+- Events: `78/100 [#######-----] 78%  (last 1h: +14)`
+- Age:    `3.48h / 24h [##---------] 14.5%  (oldest: 02:10:37 UTC)`
+- Next gate: `~1h to 100 events (at 14/h) | 20h 31m until unlock (Mon 02:10 UTC)`
+
+**Files**
+- `scripts/status.py` — added `show_backtest_readiness()` with two ASCII bars, throughput from last 1h, and a single "next gate" line
+- `scripts/test_pagination.py` → `scripts/probe_pagination.py` (pytest was auto-collecting it; it was a one-off probe, not a real test)
+
+**Housekeeping**
+- The `hyperliquid-python-sdk` and `eth-account` packages were missing from the env (likely a venv reset). Reinstalled from a fresh local clone of the GitHub repo. Tests now `104/104` passing again.
+- Committing the AGENTS.md / changelog / research-repost deltas that Codex left pending from earlier handoffs.
+
+---
+
 ## 2026-08-01 — Order Manager Hard-Parts Pass (Codex)
 
 Codex reviewed `src/execution/order_manager.py` against the order manager review brief and patched the parts that can create real execution risk. Repo venv and pytest are healthy (101/101 pass). Details in `docs/2026-08-01-HANDOFF-order-manager-hard-parts.md` and the matching vault research note.
@@ -79,7 +98,15 @@ After fetching 90 days of mainnet data, the funding rate distribution is **100-2
 
 ---
 
-## 2026-08-01 — Public Research Sweep
+## 2026-08-01 — AI / MCP / Codex Sweep
+
+- Added `docs/2026-08-01-RESEARCH-REPOST-ai-mcp-codex.md`.
+- Vault note `research/2026-08-01-AI-MCP-CODEX-SWEEP-btc-eth-liquidation.md` enumerates 30+ public Hyperliquid AI/MCP repos with verified primary-repo descriptions.
+- Confirmed Claude Code Hyperliquid MCP installs via `claude mcp add ... -- npx -y <package>`; Codex uses the same stdio MCP and `.agents/skills/<name>/SKILL.md` path; `npx skills add <owner/repo>` is the vendor-agnostic installer.
+- No first-party Codex Hyperliquid plugin was found.
+- New adoption deltas: agent (API) wallet for the bot; bracket on every entry; 128-bit hex client order IDs; OCO grouping rules; WebSocket 4-channel pattern with reconnect-with-gap; liquidation dataset bootstrap via `0xArchiveIO/0xarchive-mcp`; decision recorder to `data/decisions_*.jsonl`; plugin-based protections; ATR/pre-event-level TP/SL.
+- No LLM in the trade loop in v1. AI is for research and skill wiring only.
+- Scope unchanged: BTC/ETH, Hyperliquid only, 10x leverage cap, 1% risk/trade, strict circuit breakers.
 
 - Added `docs/2026-08-01-RESEARCH-REPOST-btc-eth-liquidation.md` for AI-editor context.
 - Reviewed public GitHub projects covering Hyperliquid liquidation alerts, wallet tracking, and trading infrastructure.
