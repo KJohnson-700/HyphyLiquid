@@ -4,6 +4,32 @@
 
 ---
 
+## 2026-08-02 (late) — Two-track strategy split, two new research docs
+
+User finished the focused BTC/ETH strategy sweep and committed the result to `docs/2026-08-02-RESEARCH-btc-eth-hyperliquid-strategy-sweep.md`. A second hybrid-strategies doc (`docs/2026-08-02-RESEARCH-hybrid-liquidation-strategies.md`) covers the SOL/HYPE / shared-primitives framing.
+
+**What changed in AGENTS.md**
+- TL;DR reframed: "single strategy class" → "liquidation-aware derivatives-flow, asset-routed into two tracks"
+- Strategy section now describes both tracks: BTC/ETH `liquidation_fade_or_follow` (v1, build now) and SOL/HYPE `range_sweep_liquidation_scalp` (Phase 2, gated on BTC/ETH validation)
+- §2 "no second strategy in parallel" clarified: the two tracks are NOT a violation (same trigger + primitives, asset-routed response classifier). A genuinely new strategy (trend-following, funding arb) is still blocked until v1 validates.
+- Quick reference + changelog bumped to reflect two-track design
+
+**What did NOT change**
+- Out of scope list (gold/silver, ML pre-100-trades, leverage > 10x, etc.) — all still blocked
+- Risk framework (AGENTS §5) — unchanged
+- Daemon set (5 daemons, 4 symbols) — unchanged
+- Build phase order — still 4-week v1, BTC/ETH first
+
+**Open work the strategy sweep identified** (unblocks needed before spec lands)
+- 1m candle subscription (currently 1h only) — needed for VWAP / band features at scalp time horizons
+- Sub-5min OI delta (poll_asset_ctx is 5min cadence, just barely adequate)
+- Book state history (we have l2book snapshots but not time-series)
+- Event-level feature store at detection time (per spec: "event VWAP, pre/post price, OI before/after, funding, spread, top-book imbalance")
+
+Mirrors to vault: `research/2026-08-02-BTC-ETH-HYPERLIQUID-STRATEGY-SWEEP.md` and `research/2026-08-02-HYBRID-LIQUIDATION-STRATEGIES.md`.
+
+---
+
 ## 2026-08-02 — Scope expanded to BTC/ETH/SOL/HYPE
 
 User asked to add SOL and HYPE to the data capture. Four-symbol monitoring is now live on all 5 daemons.

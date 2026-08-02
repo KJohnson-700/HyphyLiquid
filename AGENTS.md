@@ -19,7 +19,7 @@ date: 2026-08-01
 
 ## TL;DR
 
-We are building an automated **BTC/ETH/SOL/HYPE liquidation cascade counter-trade bot** on **Hyperliquid mainnet** with a **$1,000 USDC bankroll**. Single project, single venue, single strategy class. Conservative risk rules. 4-week build to first live trade. SOL and HYPE were added 2026-08-02 after BTC/ETH-only capture was running cleanly — HYPE is Hyperliquid-native and active, SOL has 20x lev and the deepest liquidity after BTC/ETH.
+We are building an automated **liquidation-aware derivatives-flow counter-trade bot** on **Hyperliquid mainnet** with a **$1,000 USDC bankroll**. Single project, single venue. The strategy class is liquidation cascade counter-trade; execution is asset-routed into two tracks. Conservative risk rules. SOL and HYPE were added 2026-08-02 (HYPE is HL-native, SOL has 20x lev and the deepest liquidity after BTC/ETH).
 
 **This is NOT a gold/silver project.** That was the original framing and recon (Week 0) proved it unviable — PAXG is the only metal perp on HL and it's too thin to support a $500+ strategy. We pivoted to crypto on 2026-08-01. See `vault/notes/2026-08-01-PIVOT-btc-eth-cascade.md` for the full pivot rationale (vault path: `C:\Users\AbuBa\Documents\Obsidian Vault\projects\gold-silver-hyperliquid\notes\`).
 
@@ -28,7 +28,12 @@ We are building an automated **BTC/ETH/SOL/HYPE liquidation cascade counter-trad
 ## 1. Scope (what we ARE building)
 
 ### Strategy
-**BTC/ETH/SOL/HYPE Liquidation Cascade Counter-trade** — detect on-chain liquidation events on Hyperliquid, enter counter-trades within a tight window, exit on mean reversion or stop loss. Reference: WickHunter (31★ on GitHub) for patterns.
+**Liquidation cascade counter-trade, asset-routed into two execution tracks.** Both tracks share the same trigger (liquidation burst from public trades) and the same primitives (event VWAP, OI delta, funding, BBO spread, L2 imbalance, ATR). They differ in the response classifier and time horizon:
+
+- **BTC/ETH track — `liquidation_fade_or_follow`.** Detect burst, measure immediate book response, wait 1-5 min. Reclaim/absorption → fade. Failed reclaim + continued pressure → follow. Unclear → no trade. Built for the deeper, more directional BTC/ETH books where cascades can be either exhaustion or continuation. **This is the v1 build path** (the original BTC/ETH scope, expanded). Spec: `docs/2026-08-02-RESEARCH-btc-eth-hyperliquid-strategy-sweep.md`.
+- **SOL/HYPE track — `range_sweep_liquidation_scalp`.** Detect range-compression setup, wait for band extreme + liquidation burst, require reclaim/wick-rejection confirmation, fade back to mid-band, max hold 5-30 min. Built for the choppier alts where bands actually compress. **Phase 2** — gated on BTC/ETH getting 30+ live trades first (honors "validate, then add" below).
+
+Reference: WickHunter (31★) for the original counter-trade pattern. Hybrid doc: `docs/2026-08-02-RESEARCH-hybrid-liquidation-strategies.md`.
 
 ### Venue
 **Hyperliquid mainnet** (testnet first for auth proof, mainnet for live). Official Python SDK. Wallet-based auth, no KYC.
@@ -57,7 +62,7 @@ The following were considered and explicitly rejected. **Do not propose adding t
 - ❌ **XAU/XAG perpetuals on other venues** — defeats the "Hyperliquid wins 5/6 dimensions" rationale (KYC, friction, second SDK).
 - ❌ **MT5/MQL5 ports** — xaubot-ai, 3aLaee/xauusd-trading-bot etc. are MQL5, not Python. "Fork and adapt" is a 3-4 week rewrite, not a fork.
 - ❌ **ML strategies before we have 100+ of our own live trades** — out-of-sample decay is real; no ML on synthetic backtests.
-- ❌ **Second strategy in parallel from day 1** — single strategy, validate, then add. Don't diversify before we have data.
+- ❌ **Second strategy in parallel from day 1** — single strategy, validate, then add. Don't diversify before we have data. The two execution tracks above are *not* a violation: they are the same liquidation-cascade strategy with asset-routed response classifiers. A genuinely new strategy (e.g. trend-following, funding arb) is still blocked until the v1 track is validated.
 - ❌ **Leverage above 10x** — the 50x HL allows is a liquidation engine, not a tool.
 - ❌ **PAXG as a standalone strategy** — too thin. May revisit as a pairs-trade component in Phase 2+, but not standalone.
 - ❌ **Spot/AMM trading** — Hyperliquid perps only.
@@ -115,7 +120,7 @@ HyphyLiquid/
 │   │   └── hyperliquid.py  ← SDK wrapper, auth, market data
 │   ├── strategy/
 │   │   ├── __init__.py
-│   │   └── cascade.py      ← BTC/ETH/SOL/HYPE cascade strategy
+│   │   └── cascade.py      ← BTC/ETH/SOL/HYPE liquidation cascade strategy (with asset-routed response classifiers)
 │   ├── execution/
 │   │   ├── __init__.py
 │   │   └── order_manager.py
@@ -254,7 +259,7 @@ The vault is **Obsidian-flavored** with `[[wikilinks]]` and YAML frontmatter. Ma
 |---|---|
 | Project name | HyphyLiquid (name kept despite pivot — "hyphy" = energy, still fits) |
 | Bankroll | $1,000 USDC |
-| Strategy | BTC/ETH/SOL/HYPE liquidation cascade counter-trade |
+| Strategy | Liquidation cascade counter-trade, asset-routed: BTC/ETH `fade_or_follow`, SOL/HYPE `range_sweep_scalp` |
 | Venue | Hyperliquid mainnet |
 | Reference bot | WickHunter (31★) |
 | Risk/trade | 0.5-1% = $5-$10 |
@@ -273,5 +278,7 @@ The vault is **Obsidian-flavored** with `[[wikilinks]]` and YAML frontmatter. Ma
 2026-08-01 — Initial creation, post-recon pivot from gold/silver to BTC/ETH cascade. Scope locked.
 
 2026-08-02 — Scope expanded to BTC/ETH/SOL/HYPE. HyperPerps has heatmap data for BTC/ETH/SOL only (HYPE returns sample_size=0), so the HyperPerps-poller and paper-trade-loop pull 3 symbols; the Hyperliquid-direct daemons (WS collector, liquidation monitor, asset-ctx poller, candle fetch) pull all 4. Order manager fallback ticks/szDecimals extended for HYPE.
+
+2026-08-02 (later) — Strategy split into two asset-routed execution tracks. BTC/ETH get `liquidation_fade_or_follow` (v1 build path, response classifier decides fade vs follow on event VWAP reclaim / failed reclaim within 1-5 min). SOL/HYPE get `range_sweep_liquidation_scalp` (Phase 2, gated on BTC/ETH getting 30+ live trades first). Both tracks share the same trigger (liquidation burst) and the same primitives (event VWAP, OI delta, funding, BBO spread, L2 imbalance, ATR). See `docs/2026-08-02-RESEARCH-btc-eth-hyperliquid-strategy-sweep.md` and `docs/2026-08-02-RESEARCH-hybrid-liquidation-strategies.md`.
 
 2026-08-01 — AI/MCP sweep deltas: agent (API) wallet, bracket entry, 128-bit hex client order IDs, decision recorder (`data/decisions_*.jsonl`), WebSocket 4-channel pattern. No LLM in trade loop in v1. See `docs/2026-08-01-RESEARCH-REPOST-ai-mcp-codex.md`.
