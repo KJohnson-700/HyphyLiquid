@@ -82,24 +82,41 @@ def _scan_once(
     for path in trade_dir.glob("*.jsonl"):
         sym = path.name.split("_")[0].upper()
         offset = _last_line_offset(path)
+        last_good_offset = offset
         with path.open("r", encoding="utf-8") as f:
             f.seek(offset)
-            for line in f:
+            while True:
+                line_start = f.tell()
+                line = f.readline()
+                if not line:
+                    last_good_offset = f.tell()
+                    break
                 if not line.strip():
+                    last_good_offset = f.tell()
                     continue
                 try:
                     rec = json.loads(line)
                 except json.JSONDecodeError as e:
-                    # Partial flush / corrupt line from upstream writer.
-                    # Skip and keep going; do NOT crash the monitor.
+                    # A writer may be midway through appending the final line.
+                    # Keep the offset before that line so the next scan retries it.
+                    if not line.endswith("\n"):
+                        print(
+                            f"  [warn] partial json in {path.name}; retrying next scan",
+                            flush=True,
+                        )
+                        last_good_offset = line_start
+                        break
+                    # Complete but malformed line: skip it and keep going.
                     print(
                         f"  [warn] skipping bad json in {path.name}: {e}",
                         flush=True,
                     )
+                    last_good_offset = f.tell()
                     continue
                 t = rec.get("trade", {})
                 tid = t.get("tid")
                 if tid is not None and str(tid) in seen_tids:
+                    last_good_offset = f.tell()
                     continue
                 if tid is not None:
                     seen_tids.add(str(tid))
@@ -113,13 +130,14 @@ def _scan_once(
                         tid=tid,
                     )
                 except Exception:
+                    last_good_offset = f.tell()
                     continue
                 new_events = detector.feed(ev_trade)
                 total_new_trades += 1
                 for ev in new_events:
                     rec_out = _ev_to_record(ev)
-                    with log_path.open("a", encoding="utf-8") as f:
-                        f.write(json.dumps(rec_out) + "\n")
+                    with log_path.open("a", encoding="utf-8") as out:
+                        out.write(json.dumps(rec_out) + "\n")
                     total_events += 1
                     print(
                         f"  [{rec_out['ts'][11:19]}] {ev.symbol:3}  {ev.side}  "
@@ -127,7 +145,8 @@ def _scan_once(
                         f"conf={ev.confidence:.2f}  ({ev.reason})",
                         flush=True,
                     )
-        _save_offset(path, path.stat().st_size)
+                last_good_offset = f.tell()
+        _save_offset(path, last_good_offset)
     return total_new_trades, total_events
 
 

@@ -177,47 +177,6 @@ def on_message(ws, message):
     except Exception as e:
         print(f"  [err] {channel} handler: {e}\n{traceback.format_exc()}", flush=True)
 
-    if channel == "trades":
-        # data is a list of trade objects
-        for t in payload:
-            if not isinstance(t, dict):
-                continue
-            coin = t.get("coin", "").upper()
-            if coin in SYMBOLS:
-                t["ts"] = t.get("time") or int(datetime.now(timezone.utc).timestamp() * 1000)
-                _save("trades", coin, t)
-                _save_trade_legacy_format(coin, t)
-                _maybe_log("trades", coin)
-    elif channel == "candle":
-        # data is a list of candle objects
-        for c in payload:
-            if not isinstance(c, dict):
-                continue
-            coin = c.get("s", "").upper()  # candle uses 's' for symbol
-            if coin in SYMBOLS:
-                c["ts"] = c.get("t") or int(datetime.now(timezone.utc).timestamp() * 1000)
-                c["coin"] = coin
-                _save("candle", coin, c)
-                _maybe_log("candle", coin)
-    elif channel in ("activeAssetCtx", "bbo"):
-        # data is a dict
-        if not isinstance(payload, dict):
-            return
-        coin = payload.get("coin", "").upper()
-        if coin in SYMBOLS:
-            payload["ts"] = int(datetime.now(timezone.utc).timestamp() * 1000)
-            _save(channel, coin, payload)
-            _maybe_log(channel, coin)
-    elif channel == "l2Book":
-        # data is a dict
-        if not isinstance(payload, dict):
-            return
-        coin = payload.get("coin", "").upper()
-        if coin in SYMBOLS:
-            payload["ts"] = int(datetime.now(timezone.utc).timestamp() * 1000)
-            _save("l2book", coin, payload)
-            _maybe_log("l2book", coin)
-
 
 def on_open(ws):
     print(f"[WS] Connected to {WS_URL}", flush=True)
