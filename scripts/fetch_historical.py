@@ -24,7 +24,7 @@ from src.exchange.hyperliquid import HyperliquidClient
 DATA_DIR = PROJECT_ROOT / "data"
 LOOKBACK_DAYS = int(__import__("os").environ.get("HYPERLIQUID_LOOKBACK_DAYS", "30"))
 INTERVAL = "1h"
-SYMBOLS = ["BTC", "ETH"]
+SYMBOLS = ["BTC", "ETH", "SOL", "HYPE"]
 ENV = __import__("os").environ.get("HYPERLIQUID_ENV", "testnet")
 
 

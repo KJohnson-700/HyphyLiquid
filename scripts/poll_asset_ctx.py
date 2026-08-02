@@ -23,7 +23,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import requests
 
 INFO_URL = "https://api.hyperliquid.xyz/info"
-SYMBOLS = ("BTC", "ETH")
+SYMBOLS = ("BTC", "ETH", "SOL", "HYPE")
 INTERVAL_S = 300  # 5 min
 OUT_DIR = PROJECT_ROOT / "data" / "asset_ctx"
 

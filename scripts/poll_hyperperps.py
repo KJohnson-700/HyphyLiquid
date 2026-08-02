@@ -25,7 +25,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 API_URL = "https://trade.hyperperps.app/api/public/heatmap/{symbol}"
-SYMBOLS = ("BTC", "ETH")
+# SOL has full HyperPerps heatmap data; HYPE does not (sample_size=0).
+# HYPE is added on the Hyperliquid-direct scripts (ws, monitor, asset_ctx,
+# fetch_historical) but not here.
+SYMBOLS = ("BTC", "ETH", "SOL")
 INTERVAL_S = 300  # 5 minutes, matches the API refresh cadence
 SNAPSHOT_DIR = PROJECT_ROOT / "data" / "hyperperps_snapshots"
 

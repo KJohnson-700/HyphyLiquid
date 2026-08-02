@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-08-02 — Scope expanded to BTC/ETH/SOL/HYPE
+
+User asked to add SOL and HYPE to the data capture. Four-symbol monitoring is now live on all 5 daemons.
+
+**Per-source breakdown**
+- `poll_hyperperps.py` — BTC, ETH, SOL (HYPE returns `sample_size=0` from the HyperPerps heatmap API, so no heatmap-based metrics for HYPE)
+- `paper_trade_loop.py` — same 3 symbols as the HyperPerps poller
+- `collect_ws_data.py` — all 4 symbols, all 5 channels (trades, l2Book, candle, activeAssetCtx, bbo)
+- `liquidation_monitor.py` — globs `data/trades/*.jsonl`, so any symbol with WS trades gets monitored for free
+- `poll_asset_ctx.py` — all 4 symbols (mark/OI/funding/predicted)
+- `fetch_historical.py` — all 4 symbols, 7d backfill done for SOL ($73.08 last) and HYPE ($51.92 last)
+- `OrderManager` — extended hardcoded fallback `ticks` (`$0.001` for HYPE) and `decimals` (`2` for HYPE, matching `meta()` `szDecimals`). Prefer-path through `meta()` is unchanged.
+
+**Live data first read (after ~2.5 min)**
+- SOL: 220 trade records (very active)
+- HYPE: 268 trade records (most active by count, even more than ETH)
+- BTC/ETH continue flowing
+
+**Housekeeping**
+- Killed a duplicate `liquidation_monitor` process that had been running in parallel (different Python install, double-counting events). Restarted cleanly.
+- AGENTS.md scope + leverage-cap table + GitHub description updated.
+- 104/104 tests still passing.
+
+**Out of scope (still)**
+- PAXG, XAU/XAG, MT5/MQL5, ML on synthetic backtests, second strategy in parallel, leverage > 10x, PAXG standalone — all unchanged. HYPE is added as a perp, not as a "second strategy."
+
+---
+
 ## 2026-08-01 (late session) — status.py progress bar + SDK reinstall
 
 Added a `BACKTEST READINESS` section to `scripts/status.py` so the user can see how close we are to the auto-backtest guard (100 events AND 24h old) at a glance.

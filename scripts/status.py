@@ -25,6 +25,22 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 VAULT = Path(r"C:\Users\AbuBa\Documents\Obsidian Vault\projects\gold-silver-hyperliquid")
 LOG_DIR = PROJECT_ROOT / "logs"
 
+HEALTH_LOGS = (
+    "ws_out.log",
+    "liquidation_out.log",
+    "paper_trade_loop_out.log",
+    "poll_asset_ctx_out.log",
+    "poll_hyperperps_out.log",
+)
+
+ERROR_LOGS = (
+    "ws_err.log",
+    "liquidation_err.log",
+    "paper_trade_loop_err.log",
+    "poll_asset_ctx_err.log",
+    "poll_hyperperps_err.log",
+)
+
 
 def _section(title: str) -> None:
     print()
@@ -35,14 +51,72 @@ def _section(title: str) -> None:
 
 def show_daemons() -> None:
     _section("DAEMONS")
+    # Use Get-CimInstance Win32_Process instead of Get-Process - the latter
+    # returns an empty CommandLine for processes started via Start-Process
+    # (which is how all our daemons are launched). Win32_Process always
+    # populates CommandLine when the user has access.
+    ps = (
+        "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" | "
+        "Where-Object { $_.CommandLine -match 'scripts\\\\[A-Za-z_]+\\.py' } | "
+        "Select-Object ProcessId, Name, "
+        "@{n='Script';e={ if ($_.CommandLine -match 'scripts\\\\([A-Za-z_]+)\\.py') { $Matches[1] } else { '?' } }}, "
+        "StartTime | "
+        "Sort-Object Script | "
+        "Format-Table -AutoSize | Out-String"
+    )
     out = subprocess.run(
-        ["powershell", "-NoProfile", "-Command",
-         "Get-Process pythonw -ErrorAction SilentlyContinue | "
-         "Select-Object Id, StartTime, @{n='Cmd';e={$_.CommandLine.Substring(0, [Math]::Min(80, $_.CommandLine.Length))}} | "
-         "Format-Table -AutoSize | Out-String"],
+        ["powershell", "-NoProfile", "-Command", ps],
         capture_output=True, text=True,
     )
     print(out.stdout or "(none)")
+
+
+def _age_label(path: Path) -> str:
+    if not path.exists():
+        return "missing"
+    age_seconds = datetime.now().timestamp() - path.stat().st_mtime
+    if age_seconds < 90:
+        return f"{int(age_seconds)}s ago"
+    if age_seconds < 3600:
+        return f"{int(age_seconds // 60)}m ago"
+    return f"{age_seconds / 3600:.1f}h ago"
+
+
+def _tail(path: Path, lines: int = 1) -> str:
+    if not path.exists() or path.stat().st_size == 0:
+        return ""
+    content = path.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+    return " | ".join(content[-lines:])
+
+
+def show_session_now() -> None:
+    _section("SESSION NOW")
+    print("  Runtime logs:")
+    for name in HEALTH_LOGS:
+        path = LOG_DIR / name
+        last = _tail(path)
+        status = "OK" if path.exists() and path.stat().st_size > 0 else "WAIT"
+        print(f"    {status:<4} {name:<28} {_age_label(path):>9}  {last[:110]}")
+
+    print()
+    print("  Error logs:")
+    any_errors = False
+    for name in ERROR_LOGS:
+        path = LOG_DIR / name
+        if path.exists() and path.stat().st_size > 0:
+            any_errors = True
+            print(f"    WARN {name:<28} {_age_label(path):>9}  {_tail(path)[:110]}")
+    if not any_errors:
+        print("    OK   no active error logs")
+
+    liq_path = PROJECT_ROOT / "data" / "liquidations.jsonl"
+    if liq_path.exists():
+        events = [
+            line for line in liq_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            if line.strip()
+        ]
+        print()
+        print(f"  Liquidation events captured: {len(events)}")
 
 
 def show_snapshots() -> None:
@@ -91,7 +165,12 @@ def show_tests() -> None:
         capture_output=True, text=True, cwd=str(PROJECT_ROOT),
     )
     last_line = (r.stdout.strip().splitlines() or [""])[-1]
-    print(f"  {last_line}")
+    if r.returncode == 0 and last_line:
+        print(f"  {last_line}")
+        return
+    err_line = (r.stderr.strip().splitlines() or ["pytest unavailable or failed"])[-1]
+    print(f"  SKIPPED/FAILED under {sys.executable}")
+    print(f"  {err_line}")
 
 
 def show_git() -> None:
@@ -230,6 +309,7 @@ def _parse_ts(ts: str) -> datetime:
 
 def main() -> int:
     print(f"HyphyLiquid Status  -  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    show_session_now()
     show_daemons()
     show_snapshots()
     show_paper_trades()

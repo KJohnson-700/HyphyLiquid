@@ -1,7 +1,7 @@
 ---
 project: hyphyliquid
 asset: crypto
-strategy: btc-eth-cascade
+strategy: btc-eth-sol-hype-cascade
 venue: hyperliquid
 status: building
 date: 2026-08-01
@@ -19,7 +19,7 @@ date: 2026-08-01
 
 ## TL;DR
 
-We are building an automated **BTC/ETH liquidation cascade counter-trade bot** on **Hyperliquid mainnet** with a **$1,000 USDC bankroll**. Single project, single venue, single strategy class. Conservative risk rules. 4-week build to first live trade.
+We are building an automated **BTC/ETH/SOL/HYPE liquidation cascade counter-trade bot** on **Hyperliquid mainnet** with a **$1,000 USDC bankroll**. Single project, single venue, single strategy class. Conservative risk rules. 4-week build to first live trade. SOL and HYPE were added 2026-08-02 after BTC/ETH-only capture was running cleanly — HYPE is Hyperliquid-native and active, SOL has 20x lev and the deepest liquidity after BTC/ETH.
 
 **This is NOT a gold/silver project.** That was the original framing and recon (Week 0) proved it unviable — PAXG is the only metal perp on HL and it's too thin to support a $500+ strategy. We pivoted to crypto on 2026-08-01. See `vault/notes/2026-08-01-PIVOT-btc-eth-cascade.md` for the full pivot rationale (vault path: `C:\Users\AbuBa\Documents\Obsidian Vault\projects\gold-silver-hyperliquid\notes\`).
 
@@ -28,7 +28,7 @@ We are building an automated **BTC/ETH liquidation cascade counter-trade bot** o
 ## 1. Scope (what we ARE building)
 
 ### Strategy
-**BTC/ETH Liquidation Cascade Counter-trade** — detect on-chain liquidation events on Hyperliquid, enter counter-trades within a tight window, exit on mean reversion or stop loss. Reference: WickHunter (31★ on GitHub) for patterns.
+**BTC/ETH/SOL/HYPE Liquidation Cascade Counter-trade** — detect on-chain liquidation events on Hyperliquid, enter counter-trades within a tight window, exit on mean reversion or stop loss. Reference: WickHunter (31★ on GitHub) for patterns.
 
 ### Venue
 **Hyperliquid mainnet** (testnet first for auth proof, mainnet for live). Official Python SDK. Wallet-based auth, no KYC.
@@ -36,7 +36,7 @@ We are building an automated **BTC/ETH liquidation cascade counter-trade bot** o
 ### Capital
 - **Total bankroll:** $1,000 USDC
 - **Risk per trade:** 0.5-1% = $5-$10
-- **Leverage cap:** 10x (HL allows up to 40x on BTC, 25x on ETH; we cap ourselves at 10x)
+- **Leverage cap:** 10x (HL allows up to 40x on BTC, 25x on ETH, 20x on SOL, 10x on HYPE; we cap ourselves at 10x across the board)
 - **Position size:** ~$5,000-$10,000 notional per trade
 - **Ramp:** $50 paper canary → $200 live → $500 → $1,000 over ~6-8 weeks
 
@@ -115,7 +115,7 @@ HyphyLiquid/
 │   │   └── hyperliquid.py  ← SDK wrapper, auth, market data
 │   ├── strategy/
 │   │   ├── __init__.py
-│   │   └── cascade.py      ← BTC/ETH cascade strategy
+│   │   └── cascade.py      ← BTC/ETH/SOL/HYPE cascade strategy
 │   ├── execution/
 │   │   ├── __init__.py
 │   │   └── order_manager.py
@@ -254,7 +254,7 @@ The vault is **Obsidian-flavored** with `[[wikilinks]]` and YAML frontmatter. Ma
 |---|---|
 | Project name | HyphyLiquid (name kept despite pivot — "hyphy" = energy, still fits) |
 | Bankroll | $1,000 USDC |
-| Strategy | BTC/ETH liquidation cascade counter-trade |
+| Strategy | BTC/ETH/SOL/HYPE liquidation cascade counter-trade |
 | Venue | Hyperliquid mainnet |
 | Reference bot | WickHunter (31★) |
 | Risk/trade | 0.5-1% = $5-$10 |
@@ -264,12 +264,14 @@ The vault is **Obsidian-flavored** with `[[wikilinks]]` and YAML frontmatter. Ma
 | Honest monthly target | 12-15% (not 25-33%) |
 | Honest WR target | 55-65% |
 | Honest PF target | 2.0+ |
-| GitHub description | "BTC/ETH liquidation cascade bot on Hyperliquid" (update from gold/silver) |
+| GitHub description | "BTC/ETH/SOL/HYPE liquidation cascade bot on Hyperliquid" (updated 2026-08-02 from BTC/ETH-only) |
 
 ---
 
 ## 10. Last updated
 
 2026-08-01 — Initial creation, post-recon pivot from gold/silver to BTC/ETH cascade. Scope locked.
+
+2026-08-02 — Scope expanded to BTC/ETH/SOL/HYPE. HyperPerps has heatmap data for BTC/ETH/SOL only (HYPE returns sample_size=0), so the HyperPerps-poller and paper-trade-loop pull 3 symbols; the Hyperliquid-direct daemons (WS collector, liquidation monitor, asset-ctx poller, candle fetch) pull all 4. Order manager fallback ticks/szDecimals extended for HYPE.
 
 2026-08-01 — AI/MCP sweep deltas: agent (API) wallet, bracket entry, 128-bit hex client order IDs, decision recorder (`data/decisions_*.jsonl`), WebSocket 4-channel pattern. No LLM in trade loop in v1. See `docs/2026-08-01-RESEARCH-REPOST-ai-mcp-codex.md`.

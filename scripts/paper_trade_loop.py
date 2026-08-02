@@ -53,7 +53,10 @@ def main() -> int:
     while True:
         cycle_ts = datetime.now(timezone.utc).isoformat()
         any_signal = False
-        for sym in ("BTC", "ETH"):
+        # HyperPerps only has heatmap data for BTC, ETH, SOL.
+        # HYPE is too thin — sample_size=0 — so it stays out of the
+        # HyperPerps-based paper-trade loop.
+        for sym in ("BTC", "ETH", "SOL"):
             snap = fetch_snapshot(sym)
             if snap is None:
                 continue
