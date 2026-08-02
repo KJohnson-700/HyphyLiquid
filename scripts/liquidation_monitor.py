@@ -144,8 +144,13 @@ def _scan_once(
                     # at-event feature store called for by the BTC/ETH
                     # strategy sweep (docs/2026-08-02-RESEARCH-btc-eth-
                     # hyperliquid-strategy-sweep.md, line 162).
+                    # Live mode: pass nearest=False so we get the "now"
+                    # snapshot (= the most recent l2book/asset_ctx).
                     try:
-                        write_event_features(rec_out)
+                        from src.strategy.event_features import snapshot_event_features
+                        features = snapshot_event_features(rec_out, nearest=False)
+                        with (PROJECT_ROOT / "data" / "event_features.jsonl").open("a", encoding="utf-8") as ff:
+                            ff.write(json.dumps(features) + "\n")
                     except Exception as feat_err:
                         print(
                             f"  [warn] event_features snapshot failed: {feat_err}",

@@ -61,6 +61,58 @@ def _latest_line(path: Path) -> dict | None:
     return last
 
 
+def _line_nearest_ts(path: Path, target_ts_ms: int) -> dict | None:
+    """Return the parsed JSON whose source-ts is closest to target_ts_ms.
+
+    Walks the file in O(n). Used by the historical backfill so each
+    event gets a snapshot from the SAME point in time, not the file's
+    most-recent line (which is "now" and would leak future state into
+    the backtest).
+    """
+    if not path.exists():
+        return None
+    best: dict | None = None
+    best_dist: int | None = None
+    try:
+        # Stream through the file line by line. Keep the closest match.
+        # For 30-40MB files this is ~1-2s per file in Python; acceptable
+        # for a one-shot backfill.
+        for line in path.open("r", encoding="utf-8", errors="replace"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            # Look for a ts field in standard places
+            ts_ms: int | None = None
+            if isinstance(rec, dict):
+                if "ts" in rec and isinstance(rec["ts"], (int, float)):
+                    ts_ms = int(rec["ts"])
+                elif isinstance(rec.get("payload"), dict):
+                    p = rec["payload"]
+                    if isinstance(p.get("time"), (int, float)):
+                        ts_ms = int(p["time"])
+                elif "poll_ts" in rec and isinstance(rec["poll_ts"], str):
+                    try:
+                        dt = datetime.fromisoformat(rec["poll_ts"])
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        ts_ms = int(dt.timestamp() * 1000)
+                    except (TypeError, ValueError):
+                        ts_ms = None
+            if ts_ms is None:
+                continue
+            dist = abs(ts_ms - target_ts_ms)
+            if best_dist is None or dist < best_dist:
+                best = rec
+                best_dist = dist
+    except OSError:
+        return None
+    return best
+
+
 def _date_str(ts_ms: int) -> str:
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
@@ -128,13 +180,23 @@ def _asset_ctx_features(record: dict | None) -> dict:
     }
 
 
-def snapshot_event_features(event: dict) -> dict:
+def snapshot_event_features(event: dict, nearest: bool = True) -> dict:
     """Build a feature dict for a detected liquidation event.
 
-    `event` is a dict matching the record shape written by
-    liquidation_monitor._ev_to_record:
-      ts (ISO), symbol, side, total_notional, n_fills, price_avg,
-      duration_ms, confidence, reason
+    Args:
+        event: dict matching liquidation_monitor._ev_to_record shape
+            (ts, symbol, side, total_notional, n_fills, price_avg,
+             duration_ms, confidence, reason).
+        nearest: if True (default for backfill / cluster scripts), pick
+            the l2book + asset_ctx record whose source-ts is closest to
+            the event ts. If False, use the most-recent record
+            (suitable for the live monitor at detection time, where
+            "now" IS the most recent).
+
+    For live use the monitor calls snapshot_event_features(event)
+    which uses _latest_line (the most recent snapshot = "now"). For
+    historical backfill the cluster script passes nearest=True so
+    each event gets a snapshot from its own time, not from "now."
     """
     sym = event.get("symbol", "?").upper()
     ts_str = event.get("ts", "")
@@ -149,11 +211,16 @@ def snapshot_event_features(event: dict) -> dict:
     l2_path = _symbol_date_path(DATA_DIR / "ws_l2book", sym, ts_ms)
     ctx_path = _symbol_date_path(DATA_DIR / "asset_ctx", sym, ts_ms)
 
-    l2_record = _latest_line(l2_path)
+    if nearest:
+        l2_record = _line_nearest_ts(l2_path, ts_ms)
+        ctx_record = _line_nearest_ts(ctx_path, ts_ms)
+    else:
+        l2_record = _latest_line(l2_path)
+        ctx_record = _latest_line(ctx_path)
+
     l2_payload = l2_record.get("payload") if isinstance(l2_record, dict) else None
     book_features = _bbo_from_l2book(l2_payload)
 
-    ctx_record = _latest_line(ctx_path)
     ctx_features = _asset_ctx_features(ctx_record)
 
     # Compute event VWAP sanity-check vs event-reported price_avg
