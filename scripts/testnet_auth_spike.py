@@ -135,7 +135,8 @@ def auth_test() -> bool:
         log("auth", "FAIL: could not get BTC mid price")
         return False
 
-    far_price = round(btc_mid * 0.5, 1)  # 50% of mid
+    # BTC tick size on HL is $1, so round to integer
+    far_price = int(btc_mid * 0.5)
     order_size = 0.001  # tiny
 
     log("auth", f"Placing test order: BUY 0.001 BTC @ ${far_price} (mid: ${btc_mid:,.2f})")
@@ -143,7 +144,7 @@ def auth_test() -> bool:
 
     try:
         order_result = exchange.order(
-            coin="BTC",
+            name="BTC",
             is_buy=True,
             sz=order_size,
             limit_px=far_price,
@@ -154,6 +155,20 @@ def auth_test() -> bool:
         if order_result.get("status") != "ok":
             log("auth", "FAIL: order did not return status=ok")
             return False
+        # Check inner statuses for actual fill/rejection
+        statuses = order_result.get("response", {}).get("data", {}).get("statuses", [])
+        if not statuses:
+            log("auth", "FAIL: no statuses in order response")
+            return False
+        first = statuses[0]
+        if "error" in first:
+            log("auth", f"FAIL: order rejected: {first['error']}")
+            return False
+        if "resting" not in first:
+            log("auth", f"FAIL: order not resting: {first}")
+            return False
+        oid = first["resting"]["oid"]
+        log("auth", f"Order resting, oid={oid}")
     except Exception as e:
         log("auth", f"FAIL placing order: {e}")
         return False
@@ -171,11 +186,17 @@ def auth_test() -> bool:
         log("auth", f"FAIL reading open orders: {e}")
         return False
 
-    # Cancel all open orders
+    # Cancel all open orders (new SDK has bulk_cancel instead of cancel_all)
     log("auth", "Cancelling all open orders...")
     try:
-        cancel_result = exchange.cancel_all()
-        log("auth", f"Cancel result: {cancel_result}")
+        if open_orders:
+            cancel_requests = [
+                {"coin": o["coin"], "oid": o["oid"]} for o in open_orders
+            ]
+            cancel_result = exchange.bulk_cancel(cancel_requests)
+            log("auth", f"Cancel result: {cancel_result}")
+        else:
+            log("auth", "  no open orders to cancel")
     except Exception as e:
         log("auth", f"FAIL cancelling: {e}")
         return False
@@ -185,11 +206,11 @@ def auth_test() -> bool:
     open_orders_after = info.open_orders(addr)
     log("auth", f"Open orders after cancel: {len(open_orders_after)}")
     if open_orders_after:
-        log("auth", "WARN: some orders still open after cancel_all")
+        log("auth", "WARN: some orders still open after cancel")
     else:
-        log("auth", "All orders cancelled cleanly ✓")
+        log("auth", "All orders cancelled cleanly [OK]")
 
-    log("auth", "TEST PASSED ✓")
+    log("auth", "TEST PASSED [OK]")
     log("auth", "End-to-end auth + order placement + cancellation works.")
     return True
 
