@@ -74,7 +74,7 @@ def main() -> int:
             funding.to_csv(path, index=False)
             avg_rate = funding["funding_rate"].mean()
             print(f"  funding: {len(funding)} rows -> {path.name}")
-            print(f"    avg rate per 8h: {avg_rate*100:.5f}%")
+            print(f"    avg rate per hour: {avg_rate*100:.5f}%")
             print(
                 f"    range: {funding['funding_rate'].min()*100:.5f}% — "
                 f"{funding['funding_rate'].max()*100:.5f}%"

@@ -4,7 +4,14 @@
 
 ---
 
-## 2026-08-01 — PIVOT + Project Skeleton
+## 2026-08-01 — Public Research Sweep
+
+- Added `docs/2026-08-01-RESEARCH-REPOST-btc-eth-liquidation.md` for AI-editor context.
+- Reviewed public GitHub projects covering Hyperliquid liquidation alerts, wallet tracking, and trading infrastructure.
+- Attempted Reddit, X, and YouTube searches; access/rendering limitations are recorded rather than presenting unverified claims as evidence.
+- Decision unchanged: BTC/ETH only, Hyperliquid only, one cascade strategy, strict risk controls, and no ML before 100+ own live trades.
+
+
 
 ### Overview
 Major pivot: dropped the gold/silver scope, leaned into the cascade edge on crypto. Also laid down the full project skeleton (code, tests, risk module) in the same day.

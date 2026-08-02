@@ -143,7 +143,7 @@ Build `src/risk.py` in Week 1, before any strategy code. Every other module call
 - **Bankroll < $600 (40% drawdown)** → STOP, re-evaluate with Slim
 - **No orders outside configured trading hours** (or full 24/7 with explicit config)
 - **Reduce-only** on every closing order
-- **Funding rate P&L** tracked daily (every 8h on HL)
+- **Funding rate P&L** tracked hourly (Hyperliquid settles funding every hour, not every 8h as on most CEXes)
 - **All trades journaled** to `vault/journal/YYYY-MM-DD-trades.md` (Obsidian) AND `src/journal/trade_journal.py` (code)
 
 ---

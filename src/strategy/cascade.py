@@ -43,8 +43,12 @@ class CascadeSignal:
 
 
 # Defaults — overridable per call
-DEFAULT_FUNDING_EXTREME_HIGH = 0.0010   # 0.10% per 8h
-DEFAULT_FUNDING_EXTREME_LOW = -0.0005    # -0.05% per 8h
+# IMPORTANT: Hyperliquid funding is HOURLY (not 8h as on CEXes).
+# These thresholds are calibrated against the per-hour funding rate
+# returned by info.funding_history(). A value of 0.001 = 0.10% per hour,
+# which equals ~0.80% per 8h-equivalent — quite extreme.
+DEFAULT_FUNDING_EXTREME_HIGH = 0.0010   # 0.10% per hour
+DEFAULT_FUNDING_EXTREME_LOW = -0.0005    # -0.05% per hour
 DEFAULT_CONFIDENCE_FLOOR = 0.3
 DEFAULT_CONFIDENCE_SLOPE = 5.0  # how fast confidence grows past threshold
 
@@ -88,8 +92,8 @@ def detect_funding_extreme(
                     direction=SignalDirection.SHORT,
                     confidence=confidence,
                     reason=(
-                        f"funding extreme HIGH: {rate*100:.4f}% per 8h "
-                        f"(threshold {high_threshold*100:.2f}%)"
+                        f"funding extreme HIGH: {rate*100:.4f}% per hour "
+                        f"(threshold {high_threshold*100:.2f}%/hr)"
                     ),
                     funding_rate=rate,
                     timestamp=ts,
@@ -104,8 +108,8 @@ def detect_funding_extreme(
                     direction=SignalDirection.LONG,
                     confidence=confidence,
                     reason=(
-                        f"funding extreme LOW: {rate*100:.4f}% per 8h "
-                        f"(threshold {low_threshold*100:.2f}%)"
+                        f"funding extreme LOW: {rate*100:.4f}% per hour "
+                        f"(threshold {low_threshold*100:.2f}%/hr)"
                     ),
                     funding_rate=rate,
                     timestamp=ts,

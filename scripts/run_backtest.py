@@ -2,7 +2,8 @@
 HyphyLiquid — Run the backtest on real data
 
 Loads BTC + ETH candles + funding from data/, detects cascade signals,
-runs the backtester, prints honest metrics including the 50% haircut.
+runs the backtester + parameter sweep + walk-forward validation,
+prints honest metrics including the 50% haircut.
 
 Run:
     .\\venv\\Scripts\\python.exe scripts\\run_backtest.py
@@ -18,6 +19,7 @@ import pandas as pd
 
 from src.strategy.backtest import run_backtest
 from src.strategy.cascade import detect_funding_extreme, summarize_funding_extremes
+from src.strategy.validation import parameter_sweep, walk_forward
 
 DATA_DIR = PROJECT_ROOT / "data"
 SYMBOLS = ["BTC", "ETH"]
@@ -70,21 +72,72 @@ def print_result(label: str, result) -> None:
     print()
 
 
+def print_sweep_report(report) -> None:
+    print("=" * 60)
+    print("PARAMETER STABILITY SWEEP")
+    print("=" * 60)
+    print(f"  configs tested:        {len(report.results)}")
+    print(f"  PnL CoV (lower=stable): {report.pnl_coefficient_of_variation:.2f}")
+    print(f"  IS STABLE:             {'YES' if report.is_stable else 'NO'}")
+    print(f"  % profitable configs:  {report.pct_configs_profitable:.0f}%")
+    print(f"  median win rate:       {report.median_win_rate*100:.1f}%")
+    print(f"  median profit factor:  {report.median_profit_factor:.2f}")
+    print(f"  median return %:       {report.median_return_pct:+.2f}%")
+    print()
+    if report.best_config and report.worst_config:
+        print(f"  BEST CONFIG:  high_t={report.best_config.high_threshold*100:.4f}%  "
+              f"low_t={report.best_config.low_threshold*100:.4f}%  "
+              f"return={report.best_config.return_pct:+.2f}%  "
+              f"WR={report.best_config.win_rate*100:.0f}%  "
+              f"PF={report.best_config.profit_factor:.2f}")
+        print(f"  WORST CONFIG: high_t={report.worst_config.high_threshold*100:.4f}%  "
+              f"low_t={report.worst_config.low_threshold*100:.4f}%  "
+              f"return={report.worst_config.return_pct:+.2f}%  "
+              f"WR={report.worst_config.win_rate*100:.0f}%  "
+              f"PF={report.worst_config.profit_factor:.2f}")
+    print()
+
+
+def print_walk_forward(result) -> None:
+    print("=" * 60)
+    print("WALK-FORWARD VALIDATION")
+    print("=" * 60)
+    print(f"  folds:                 {result.n_folds}")
+    print(f"  avg train PnL:         ${result.avg_train_pnl:.2f}")
+    print(f"  avg test PnL:          ${result.avg_test_pnl:.2f}")
+    print(f"  test/train degradation: {result.test_pnl_degradation_pct:+.1f}%")
+    print(f"  avg test win rate:     {result.avg_test_win_rate*100:.1f}%")
+    print(f"  avg test profit factor: {result.avg_test_profit_factor:.2f}")
+    print(f"  % profitable folds:    {result.pct_folds_profitable:.0f}%")
+    print(f"  CONSISTENT:            {'YES' if result.consistent_across_folds else 'NO'}")
+    print()
+    print(f"  per-fold breakdown:")
+    for f in result.folds:
+        marker = "+" if f.test_pnl_usd >= 0 else "-"
+        print(
+            f"    fold {f.fold_id}: train_pnl=${f.train_pnl_usd:+.2f} ({f.train_return_pct:+.1f}%)  "
+            f"test_pnl=${f.test_pnl_usd:+.2f} ({f.test_return_pct:+.1f}%)  "
+            f"test_WR={f.test_win_rate*100:.0f}%  "
+            f"[{marker}]"
+        )
+    print()
+
+
 def main() -> int:
-    print("HyphyLiquid - Backtest on Real Data")
+    print("HyphyLiquid - Backtest + Validation on Real Data")
     print("=" * 60)
     print()
 
-    print("[1/3] Loading data...")
+    print("[1/5] Loading data...")
     candles_by_symbol, funding_by_symbol = load_data()
     if not candles_by_symbol:
-        print("  no data found in data/ — run scripts/fetch_historical.py first")
+        print("  no data found in data/ - run scripts/fetch_historical.py first")
         return 1
     for sym, df in candles_by_symbol.items():
         print(f"  {sym}: {len(df)} candles, {len(funding_by_symbol[sym])} funding events")
     print()
 
-    print("[2/3] Detecting cascade signals...")
+    print("[2/5] Detecting cascade signals (default thresholds)...")
     all_signals = []
     for symbol in SYMBOLS:
         if symbol not in funding_by_symbol:
@@ -101,34 +154,10 @@ def main() -> int:
     print()
 
     if not all_signals:
-        print("  no signals — nothing to backtest")
+        print("  no signals - nothing to backtest")
         return 0
 
-    print("[3/3] Running backtest...")
-    print()
-
-    # Per-symbol
-    for symbol in SYMBOLS:
-        sym_signals = [s for s in all_signals if s.symbol == symbol]
-        if not sym_signals:
-            continue
-        result = run_backtest(
-            signals=sym_signals,
-            candles_by_symbol=candles_by_symbol,
-            funding_by_symbol=funding_by_symbol,
-            initial_bankroll=1000.0,
-            risk_per_trade_pct=0.01,
-            leverage=10.0,
-            take_profit_atr_multiple=2.0,
-            stop_loss_atr_multiple=1.0,
-            max_hold_bars=24,
-            slippage_bps=5.0,
-            taker_fee_pct=0.00045,
-            confidence_sizing=True,
-        )
-        print_result(f"{symbol} backtest", result)
-
-    # Combined portfolio
+    print("[3/5] Running baseline backtest (default thresholds)...")
     result = run_backtest(
         signals=all_signals,
         candles_by_symbol=candles_by_symbol,
@@ -144,6 +173,26 @@ def main() -> int:
         confidence_sizing=True,
     )
     print_result("COMBINED (BTC + ETH) backtest", result)
+
+    print("[4/5] Parameter stability sweep...")
+    sweep = parameter_sweep(
+        candles_by_symbol=candles_by_symbol,
+        funding_by_symbol=funding_by_symbol,
+        high_thresholds=[0.0005, 0.0010, 0.0015, 0.0020, 0.0025, 0.0030],
+        low_thresholds=[-0.0010, -0.0007, -0.0005, -0.0003, -0.0001],
+    )
+    print_sweep_report(sweep)
+
+    print("[5/5] Walk-forward validation (3 folds)...")
+    wf = walk_forward(
+        candles_by_symbol=candles_by_symbol,
+        funding_by_symbol=funding_by_symbol,
+        n_folds=3,
+        train_frac=0.6,
+        high_threshold=0.0010,
+        low_threshold=-0.0005,
+    )
+    print_walk_forward(wf)
 
     return 0
 
