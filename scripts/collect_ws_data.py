@@ -1,12 +1,12 @@
 """
 HyphyLiquid - Multi-channel public WebSocket collector.
 
-Subscribes to public, no-auth WebSocket channels for BTC and ETH:
-  - trades      (every public trade, real-time)
-  - l2Book      (top-of-book depth, 10 levels, real-time)
-  - candle      (1h candle updates)
+Subscribes to public, no-auth WebSocket channels for BTC, ETH, SOL, HYPE:
+  - trades         (every public trade, real-time)
+  - l2Book         (top-of-book depth, 10 levels, real-time)
+  - candle         (1m candle updates — needed for scalp time horizons)
   - activeAssetCtx (mark, oracle, funding, OI per coin, real-time)
-  - bbo         (best bid/offer only, lighter than l2Book)
+  - bbo            (best bid/offer only, lighter than l2Book)
 
 Saves each channel's data to its own directory:
   data/ws_trades/{sym}_{date}.jsonl
@@ -14,6 +14,10 @@ Saves each channel's data to its own directory:
   data/ws_candle/{sym}_{date}.jsonl
   data/ws_asset_ctx/{sym}_{date}.jsonl
   data/ws_bbo/{sym}_{date}.jsonl
+
+For 1h historical candles (regime detection, band features), use
+scripts/fetch_historical.py — that pulls 1h backfill via REST.
+The WS `candle` channel is 1m-only here for the live scalp-grade data.
 
 Run foreground (Ctrl+C to stop):
     .\\venv\\Scripts\\python.exe scripts\\collect_ws_data.py
@@ -135,6 +139,13 @@ def on_message(ws, message):
     if channel not in ("trades", "candle", "activeAssetCtx", "bbo", "l2Book"):
         print(f"  [debug] unknown channel={channel!r}, data type={type(payload).__name__}, sample={str(payload)[:300]}", flush=True)
         return
+    # Diagnostic: show one sample of the payload structure for each channel
+    # the first time we see it, so the field-name assumptions stay honest.
+    if not hasattr(on_message, "_seen_channels"):
+        on_message._seen_channels = set()  # type: ignore[attr-defined]
+    if channel not in on_message._seen_channels:  # type: ignore[attr-defined]
+        on_message._seen_channels.add(channel)  # type: ignore[attr-defined]
+        print(f"  [schema] first {channel} payload: {str(payload)[:400]}", flush=True)
 
     # Per-channel handling
     try:
@@ -149,10 +160,13 @@ def on_message(ws, message):
                     _save_trade_legacy_format(coin, t)
                     _maybe_log("trades", coin)
         elif channel == "candle":
-            for c in payload:
-                if not isinstance(c, dict):
-                    continue
-                coin = c.get("s", "").upper()
+            # Candle payload is a SINGLE dict (not a list like trades).
+            # The handler used to iterate as if it were a list, which made
+            # the dict's string keys trip the isinstance(dict) check and
+            # silently drop every record. See 2026-08-02 hot-fix.
+            c = payload if isinstance(payload, dict) else None
+            if c is not None:
+                coin = (c.get("s") or c.get("coin") or c.get("sym") or "").upper()
                 if coin in SYMBOLS:
                     c["ts"] = c.get("t") or int(datetime.now(timezone.utc).timestamp() * 1000)
                     c["coin"] = coin
@@ -184,7 +198,9 @@ def on_open(ws):
         for channel, extra in [
             ("trades", {}),
             ("l2Book", {"nSigFigs": 5}),
-            ("candle", {"interval": "1h"}),
+            # 1m candles (live scalp-grade); 1h history comes from
+            # scripts/fetch_historical.py (REST backfill).
+            ("candle", {"interval": "1m"}),
             ("activeAssetCtx", {}),
             ("bbo", {}),
         ]:

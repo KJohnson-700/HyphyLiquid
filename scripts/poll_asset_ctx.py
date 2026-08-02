@@ -24,7 +24,9 @@ import requests
 
 INFO_URL = "https://api.hyperliquid.xyz/info"
 SYMBOLS = ("BTC", "ETH", "SOL", "HYPE")
-INTERVAL_S = 300  # 5 min
+# 1 min cadence — needed to compute OI delta inside the 1-5 min
+# `liquidation_fade_or_follow` wait window. 5 min was too coarse.
+INTERVAL_S = 60
 OUT_DIR = PROJECT_ROOT / "data" / "asset_ctx"
 
 

@@ -22,6 +22,7 @@ from src.strategy.liquidation_detector import (
     LiquidationEvent,
     TradeEvent,
 )
+from src.strategy.event_features import write_event_features
 
 TRADE_DIR = PROJECT_ROOT / "data" / "trades"
 LOG_PATH = PROJECT_ROOT / "data" / "liquidations.jsonl"
@@ -138,6 +139,18 @@ def _scan_once(
                     rec_out = _ev_to_record(ev)
                     with log_path.open("a", encoding="utf-8") as out:
                         out.write(json.dumps(rec_out) + "\n")
+                    # Snapshot book + asset-ctx state at detection time
+                    # and write to data/event_features.jsonl. This is the
+                    # at-event feature store called for by the BTC/ETH
+                    # strategy sweep (docs/2026-08-02-RESEARCH-btc-eth-
+                    # hyperliquid-strategy-sweep.md, line 162).
+                    try:
+                        write_event_features(rec_out)
+                    except Exception as feat_err:
+                        print(
+                            f"  [warn] event_features snapshot failed: {feat_err}",
+                            flush=True,
+                        )
                     total_events += 1
                     print(
                         f"  [{rec_out['ts'][11:19]}] {ev.symbol:3}  {ev.side}  "
