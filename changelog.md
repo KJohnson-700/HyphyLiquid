@@ -4,6 +4,17 @@
 
 ---
 
+## 2026-08-01 — 90-day Backtest Pass
+
+- `scripts/fetch_historical.py` — added `import pandas as pd` (NameError fix); pagination walks 20-day chunks to bypass 500-event API cap
+- `scripts/run_backtest.py` — `load_data()` now picks the longest lookback file available (90d > 30d > 7d)
+- Fetched 90 days: 2161 candles + 2160 funding events per symbol (BTC + ETH)
+- Backtest on 90d: 387 trades, 59.4% WR, PF 5.89, 100% of sweep configs profitable, walk-forward CONSISTENT (3/3 folds green)
+- **Caveat: this is TESTNET data, not mainnet.** Funding dynamics may differ.
+- See `vault/changelog.md` 2026-08-01 entry for full results
+
+---
+
 ## 2026-08-01 — Public Research Sweep
 
 - Added `docs/2026-08-01-RESEARCH-REPOST-btc-eth-liquidation.md` for AI-editor context.

@@ -25,24 +25,35 @@ DATA_DIR = PROJECT_ROOT / "data"
 SYMBOLS = ["BTC", "ETH"]
 
 
+def _find_data(symbol: str) -> tuple[Path | None, Path | None]:
+    """Prefer the longest lookback available; fall back to 30d, then 7d."""
+    for suffix in ("90d", "30d", "7d"):
+        c = DATA_DIR / f"{symbol.lower()}_candles_1h_{suffix}.csv"
+        f = DATA_DIR / f"{symbol.lower()}_funding_{suffix}.csv"
+        if c.exists() and f.exists():
+            return c, f
+    return None, None
+
+
 def load_data():
-    """Load candles and funding for all symbols."""
+    """Load candles and funding for all symbols (prefers longest lookback)."""
     candles_by_symbol = {}
     funding_by_symbol = {}
     for symbol in SYMBOLS:
-        c_path = DATA_DIR / f"{symbol.lower()}_candles_1h_30d.csv"
-        f_path = DATA_DIR / f"{symbol.lower()}_funding_30d.csv"
-        if c_path.exists() and f_path.exists():
-            candles = pd.read_csv(c_path)
-            candles["timestamp"] = pd.to_datetime(
-                candles["timestamp"], format="ISO8601", utc=True
-            )
-            funding = pd.read_csv(f_path)
-            funding["timestamp"] = pd.to_datetime(
-                funding["timestamp"], format="ISO8601", utc=True
-            )
-            candles_by_symbol[symbol] = candles
-            funding_by_symbol[symbol] = funding
+        c_path, f_path = _find_data(symbol)
+        if c_path is None:
+            print(f"  {symbol}: no data file found in {DATA_DIR}")
+            continue
+        candles = pd.read_csv(c_path)
+        candles["timestamp"] = pd.to_datetime(
+            candles["timestamp"], format="ISO8601", utc=True
+        )
+        funding = pd.read_csv(f_path)
+        funding["timestamp"] = pd.to_datetime(
+            funding["timestamp"], format="ISO8601", utc=True
+        )
+        candles_by_symbol[symbol] = candles
+        funding_by_symbol[symbol] = funding
     return candles_by_symbol, funding_by_symbol
 
 

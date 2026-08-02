@@ -1,4 +1,4 @@
-"""
+﻿"""
 HyphyLiquid — Fetch historical candles + funding for BTC and ETH.
 
 Saves to data/ as CSVs:
@@ -13,6 +13,7 @@ Run:
 
 import sys
 from datetime import datetime, timezone
+import pandas as pd
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -21,7 +22,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.exchange.hyperliquid import HyperliquidClient
 
 DATA_DIR = PROJECT_ROOT / "data"
-LOOKBACK_DAYS = 30
+LOOKBACK_DAYS = int(__import__("os").environ.get("HYPERLIQUID_LOOKBACK_DAYS", "30"))
 INTERVAL = "1h"
 SYMBOLS = ["BTC", "ETH"]
 
@@ -63,23 +64,52 @@ def main() -> int:
                 f"(last: ${df['close'].iloc[-1]:,.2f})"
             )
 
-        # Funding
-        funding = client.get_funding_history(
-            symbol, start_ms=start_ms, end_ms=end_ms
-        )
-        if funding.empty:
+        # Funding (paginated — API caps at 500 events, returns the OLDEST 500
+        # in a large range. So we walk back in 20-day chunks from "now", each
+        # returning ~480 recent events, then concatenate.)
+        chunk_ms = 20 * 24 * 60 * 60 * 1000
+        all_funding = []
+        chunk_end = end_ms
+        safety_iters = 0
+        while chunk_end > start_ms and safety_iters < 20:
+            safety_iters += 1
+            chunk_start = max(start_ms, chunk_end - chunk_ms)
+            chunk = client.get_funding_history(
+                symbol, start_ms=chunk_start, end_ms=chunk_end
+            )
+            if chunk.empty:
+                break
+            all_funding.append(chunk)
+            # Stop if this chunk's earliest event is at or before start_ms
+            if chunk["timestamp"].iloc[0] <= pd.Timestamp(
+                start_ms, unit="ms", tz="UTC"
+            ):
+                break
+            chunk_end = int(
+                chunk["timestamp"].iloc[0].timestamp() * 1000
+            ) - 1
+        if not all_funding:
             print("  funding: NO DATA")
         else:
+            funding = (
+                pd.concat(all_funding)
+                .drop_duplicates(subset=["timestamp"])
+                .sort_values("timestamp")
+                .reset_index(drop=True)
+            )
             path = DATA_DIR / f"{symbol.lower()}_funding_{LOOKBACK_DAYS}d.csv"
             funding.to_csv(path, index=False)
             avg_rate = funding["funding_rate"].mean()
             print(f"  funding: {len(funding)} rows -> {path.name}")
+            print(
+                f"    range: {funding['timestamp'].iloc[0]} -> "
+                f"{funding['timestamp'].iloc[-1]}"
+            )
             print(f"    avg rate per hour: {avg_rate*100:.5f}%")
             print(
-                f"    range: {funding['funding_rate'].min()*100:.5f}% — "
+                f"    rate range: {funding['funding_rate'].min()*100:.5f}% - "
                 f"{funding['funding_rate'].max()*100:.5f}%"
             )
-        print()
 
     print(f"Done. Data saved to {DATA_DIR}")
     return 0
