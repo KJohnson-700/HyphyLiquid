@@ -66,6 +66,71 @@ def _ev_to_record(ev: LiquidationEvent) -> dict:
     }
 
 
+def _scan_once(
+    detector: LiquidationDetector,
+    seen_tids: set,
+    trade_dir: Path = TRADE_DIR,
+    log_path: Path = LOG_PATH,
+) -> tuple[int, int]:
+    """One pass over every trade file. Returns (new_trades, new_events).
+
+    Skips blank lines and JSON-decode errors (partial flush from upstream
+    writers) without raising. New trade events are appended to log_path.
+    """
+    total_new_trades = 0
+    total_events = 0
+    for path in trade_dir.glob("*.jsonl"):
+        sym = path.name.split("_")[0].upper()
+        offset = _last_line_offset(path)
+        with path.open("r", encoding="utf-8") as f:
+            f.seek(offset)
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError as e:
+                    # Partial flush / corrupt line from upstream writer.
+                    # Skip and keep going; do NOT crash the monitor.
+                    print(
+                        f"  [warn] skipping bad json in {path.name}: {e}",
+                        flush=True,
+                    )
+                    continue
+                t = rec.get("trade", {})
+                tid = t.get("tid")
+                if tid is not None and str(tid) in seen_tids:
+                    continue
+                if tid is not None:
+                    seen_tids.add(str(tid))
+                try:
+                    ev_trade = TradeEvent(
+                        symbol=sym,
+                        timestamp_ms=int(t.get("time", 0)),
+                        side=t.get("side", "?"),
+                        price=float(t.get("px", 0)),
+                        size=float(t.get("sz", 0)),
+                        tid=tid,
+                    )
+                except Exception:
+                    continue
+                new_events = detector.feed(ev_trade)
+                total_new_trades += 1
+                for ev in new_events:
+                    rec_out = _ev_to_record(ev)
+                    with log_path.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps(rec_out) + "\n")
+                    total_events += 1
+                    print(
+                        f"  [{rec_out['ts'][11:19]}] {ev.symbol:3}  {ev.side}  "
+                        f"${ev.total_notional:>12,.0f}  {ev.n_fills:>2} fills  "
+                        f"conf={ev.confidence:.2f}  ({ev.reason})",
+                        flush=True,
+                    )
+        _save_offset(path, path.stat().st_size)
+    return total_new_trades, total_events
+
+
 def main() -> int:
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     print(f"Liquidation monitor started at {datetime.now(timezone.utc).isoformat()}")
@@ -77,48 +142,7 @@ def main() -> int:
     seen_tids: set = set()
 
     while True:
-        total_new_trades = 0
-        total_events = 0
-        for path in TRADE_DIR.glob("*.jsonl"):
-            sym = path.name.split("_")[0].upper()
-            offset = _last_line_offset(path)
-            with path.open("r", encoding="utf-8") as f:
-                f.seek(offset)
-                for line in f:
-                    if not line.strip():
-                        continue
-                    rec = json.loads(line)
-                    t = rec.get("trade", {})
-                    tid = t.get("tid")
-                    if tid is not None and str(tid) in seen_tids:
-                        continue
-                    if tid is not None:
-                        seen_tids.add(str(tid))
-                    try:
-                        ev_trade = TradeEvent(
-                            symbol=sym,
-                            timestamp_ms=int(t.get("time", 0)),
-                            side=t.get("side", "?"),
-                            price=float(t.get("px", 0)),
-                            size=float(t.get("sz", 0)),
-                            tid=tid,
-                        )
-                    except Exception:
-                        continue
-                    new_events = detector.feed(ev_trade)
-                    total_new_trades += 1
-                    for ev in new_events:
-                        rec_out = _ev_to_record(ev)
-                        with LOG_PATH.open("a", encoding="utf-8") as f:
-                            f.write(json.dumps(rec_out) + "\n")
-                        total_events += 1
-                        print(
-                            f"  [{rec_out['ts'][11:19]}] {ev.symbol:3}  {ev.side}  "
-                            f"${ev.total_notional:>12,.0f}  {ev.n_fills:>2} fills  "
-                            f"conf={ev.confidence:.2f}  ({ev.reason})",
-                            flush=True,
-                        )
-            _save_offset(path, path.stat().st_size)
+        total_new_trades, total_events = _scan_once(detector, seen_tids)
         if total_new_trades:
             print(f"  [scan] {total_new_trades} new trades, {total_events} events", flush=True)
         time.sleep(POLL_INTERVAL_S)
