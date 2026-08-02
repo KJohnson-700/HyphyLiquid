@@ -3,7 +3,7 @@ HyphyLiquid - Order manager.
 
 Takes a CascadeSignal, validates against risk.py, sizes the position,
 and places the entry + take-profit + stop-loss atomically via
-bulk_orders with grouping="positionTpsl".
+bulk_orders with grouping="normalTpsl".
 
 The atomic placement matters: if the entry fails, neither TP nor SL
 exist. If entry fills, both TP and SL are live in the same block.
@@ -37,6 +37,8 @@ from src.strategy.cascade import CascadeSignal, SignalDirection
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_ORDER_GROUPING = "normalTpsl"
+
 
 @dataclass
 class OrderResult:
@@ -50,10 +52,18 @@ class OrderResult:
     sl_px: float
     risk_verdict: RiskVerdict
     filled: bool
+    status: str = "rejected"
+    size_coin: float = 0.0
+    needs_reconciliation: bool = False
+    cancel_attempted: bool = False
     error: Optional[str] = None
     entry_oid: Optional[int] = None
     tp_oid: Optional[int] = None
     sl_oid: Optional[int] = None
+    entry_status: Optional[dict] = None
+    tp_status: Optional[dict] = None
+    sl_status: Optional[dict] = None
+    cancel_response: Optional[dict] = None
     response: Optional[dict] = None
 
 
@@ -64,7 +74,8 @@ class OrderManager:
                  tp_atr_multiple: float = 2.0,
                  sl_atr_multiple: float = 1.0,
                  env: str = "testnet",
-                 risk_state: Optional[RiskState] = None):
+                 risk_state: Optional[RiskState] = None,
+                 order_grouping: str = DEFAULT_ORDER_GROUPING):
         self.exchange = exchange
         self.info = info
         self.bankroll = bankroll
@@ -73,6 +84,8 @@ class OrderManager:
         self.tp_atr_multiple = tp_atr_multiple
         self.sl_atr_multiple = sl_atr_multiple
         self.env = env
+        self.order_grouping = order_grouping
+        self._meta_cache: Optional[dict] = None
         self._risk_cfg = RiskConfig(
             bankroll_usd=bankroll,
             max_risk_per_trade_pct=risk_per_trade_pct,
@@ -137,22 +150,75 @@ class OrderManager:
         tick = ticks.get(symbol, 0.01)
         return round(round(price / tick) * tick, 6)
 
+    def _asset_meta(self, symbol: str) -> dict:
+        """Return Hyperliquid metadata for a symbol when available."""
+        if self._meta_cache is None:
+            try:
+                self._meta_cache = self.info.meta()
+            except Exception:
+                logger.warning("could not load Hyperliquid meta; using size fallbacks", exc_info=True)
+                self._meta_cache = {}
+        for asset in self._meta_cache.get("universe", []):
+            if asset.get("name") == symbol:
+                return asset
+        return {}
+
     def _round_size(self, symbol: str, size: float) -> float:
+        asset = self._asset_meta(symbol)
+        if "szDecimals" in asset:
+            return round(size, int(asset["szDecimals"]))
         decimals = {"BTC": 5, "ETH": 4, "SOL": 2}
         d = decimals.get(symbol, 3)
         return round(size, d)
 
+    def _cancel_entry_if_possible(self, symbol: str, entry_oid: Optional[int]) -> tuple[bool, Optional[dict], Optional[str]]:
+        """Try to cancel a resting parent order after child TP/SL failure."""
+        if entry_oid is None:
+            return False, None, None
+        try:
+            resp = self.exchange.bulk_cancel([{"coin": symbol, "oid": entry_oid}])
+            return True, resp, None
+        except Exception as e:
+            logger.exception("failed to cancel orphan entry order")
+            return True, None, str(e)
+
     def execute(self, signal: CascadeSignal, candles: pd.DataFrame,
                 current_price: Optional[float] = None) -> OrderResult:
         symbol = signal.symbol
+        if signal.direction == SignalDirection.NO_TRADE:
+            return OrderResult(
+                signal_ts=signal.timestamp, symbol=symbol, side="no_trade",
+                requested_size_usd=0.0, requested_leverage=0.0,
+                entry_px=0.0, tp_px=0.0, sl_px=0.0,
+                risk_verdict=RiskVerdict.REJECTED_RISK_PCT,
+                filled=False, status="rejected", error="signal direction is NO_TRADE",
+            )
+
         is_buy = signal.direction == SignalDirection.LONG
         side_str = "long" if is_buy else "short"
 
         if current_price is None:
+            if candles.empty:
+                return OrderResult(
+                    signal_ts=signal.timestamp, symbol=symbol, side=side_str,
+                    requested_size_usd=0.0, requested_leverage=0.0,
+                    entry_px=0.0, tp_px=0.0, sl_px=0.0,
+                    risk_verdict=RiskVerdict.REJECTED_RISK_PCT,
+                    filled=False, status="rejected",
+                    error="current_price is required when candles are empty",
+                )
             current_price = float(candles["close"].iloc[-1])
         atr = self._atr(candles)
         if atr <= 0:
-            atr = current_price * 0.005
+            return OrderResult(
+                signal_ts=signal.timestamp, symbol=symbol, side=side_str,
+                requested_size_usd=0.0, requested_leverage=0.0,
+                entry_px=self._round_to_tick(symbol, current_price),
+                tp_px=0.0, sl_px=0.0,
+                risk_verdict=RiskVerdict.REJECTED_RISK_PCT,
+                filled=False, status="rejected",
+                error="insufficient candle history for ATR; refusing to synthesize stop distance",
+            )
 
         if is_buy:
             entry = current_price
@@ -177,9 +243,10 @@ class OrderManager:
                 requested_size_usd=0.0, requested_leverage=0.0,
                 entry_px=entry_r, tp_px=tp_r, sl_px=sl_r,
                 risk_verdict=RiskVerdict.REJECTED_RISK_PCT,
-                filled=False, error="position size rounds to zero",
+                filled=False, status="rejected", error="position size rounds to zero",
             )
 
+        notional = size_r * entry_r
         leverage = notional / self.bankroll if self.bankroll > 0 else 0.0
         # Risk check: stop_distance_usd is what we'd lose at the SL
         sl_distance_pct = sl_distance / entry_r if entry_r > 0 else 0
@@ -194,7 +261,8 @@ class OrderManager:
                 signal_ts=signal.timestamp, symbol=symbol, side=side_str,
                 requested_size_usd=notional, requested_leverage=leverage,
                 entry_px=entry_r, tp_px=tp_r, sl_px=sl_r,
-                risk_verdict=verdict, filled=False,
+                risk_verdict=verdict, filled=False, status="risk_rejected",
+                size_coin=size_r,
                 error=f"risk rejected: {verdict.value}",
             )
 
@@ -225,22 +293,31 @@ class OrderManager:
             },
         ]
         try:
-            resp = self.exchange.bulk_orders(order_requests, grouping="positionTpsl")
+            resp = self.exchange.bulk_orders(order_requests, grouping=self.order_grouping)
         except Exception as e:
             logger.exception("bulk_orders failed")
             return OrderResult(
                 signal_ts=signal.timestamp, symbol=symbol, side=side_str,
                 requested_size_usd=notional, requested_leverage=leverage,
                 entry_px=entry_r, tp_px=tp_r, sl_px=sl_r,
-                risk_verdict=verdict, filled=False, error=f"exchange error: {e}",
+                risk_verdict=verdict, filled=False, status="exchange_error",
+                size_coin=size_r, error=f"exchange error: {e}",
             )
 
         filled = False
         entry_oid = tp_oid = sl_oid = None
         error = None
+        status = "unknown"
+        needs_reconciliation = False
+        cancel_attempted = False
+        cancel_response = None
+        entry_status = tp_status = sl_status = None
         try:
             statuses = resp.get("response", {}).get("data", {}).get("statuses", [])
+            status_by_idx = {0: None, 1: None, 2: None}
             for i, st in enumerate(statuses):
+                if i in status_by_idx:
+                    status_by_idx[i] = st
                 if "error" in st:
                     error = f"order {i}: {st['error']}"
                 elif "resting" in st:
@@ -251,15 +328,50 @@ class OrderManager:
                         tp_oid = oid
                     elif i == 2:
                         sl_oid = oid
-            filled = entry_oid is not None and error is None
+                elif "filled" in st:
+                    oid = st["filled"].get("oid")
+                    if i == 0:
+                        entry_oid = oid
+                    elif i == 1:
+                        tp_oid = oid
+                    elif i == 2:
+                        sl_oid = oid
+            entry_status = status_by_idx[0]
+            tp_status = status_by_idx[1]
+            sl_status = status_by_idx[2]
+            entry_live = entry_oid is not None
+            child_failure = error is not None and entry_live
+            if child_failure:
+                cancel_attempted, cancel_response, cancel_error = self._cancel_entry_if_possible(symbol, entry_oid)
+                needs_reconciliation = True
+                if cancel_error:
+                    error = f"{error}; orphan cancel failed: {cancel_error}"
+                elif cancel_attempted:
+                    error = f"{error}; attempted to cancel orphan entry oid={entry_oid}"
+                status = "orphan_error"
+            elif error:
+                status = "rejected"
+            elif entry_live and tp_oid is not None and sl_oid is not None:
+                status = "submitted"
+            else:
+                error = f"incomplete order response: {statuses}"
+                status = "reconcile_unknown"
+                needs_reconciliation = True
+            filled = status == "submitted"
         except Exception as e:
             error = f"parse error: {e}; raw={resp}"
+            status = "parse_error"
+            needs_reconciliation = True
 
         return OrderResult(
             signal_ts=signal.timestamp, symbol=symbol, side=side_str,
             requested_size_usd=notional, requested_leverage=leverage,
             entry_px=entry_r, tp_px=tp_r, sl_px=sl_r,
-            risk_verdict=verdict, filled=filled, error=error,
+            risk_verdict=verdict, filled=filled, status=status,
+            size_coin=size_r, needs_reconciliation=needs_reconciliation,
+            cancel_attempted=cancel_attempted, error=error,
             entry_oid=entry_oid, tp_oid=tp_oid, sl_oid=sl_oid,
+            entry_status=entry_status, tp_status=tp_status, sl_status=sl_status,
+            cancel_response=cancel_response,
             response=resp,
         )

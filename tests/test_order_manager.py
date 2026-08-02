@@ -40,9 +40,19 @@ class _FakeExchange:
             raise self.raise_exc
         return self.response
 
+    def bulk_cancel(self, requests):
+        self.calls.append(("cancel", requests))
+        return {"status": "ok", "response": {"type": "cancel", "data": {"statuses": ["success"]}}}
+
 
 class _FakeInfo:
-    pass
+    def meta(self):
+        return {
+            "universe": [
+                {"name": "BTC", "szDecimals": 5},
+                {"name": "ETH", "szDecimals": 4},
+            ]
+        }
 
 
 def _candles(n: int = 30, base: float = 60000.0, vol: float = 200.0) -> pd.DataFrame:
@@ -104,25 +114,25 @@ def test_tick_rounding_btc() -> None:
 
 
 def test_size_capped_at_max_leverage() -> None:
-    # With a stop that's extremely far from entry, notional would exceed
-    # max_leverage * bankroll; verify we cap.
+    # With an intentionally huge risk budget, notional would exceed
+    # max_leverage * bankroll; verify we cap before risk approval.
     mgr = OrderManager(_FakeExchange(), _FakeInfo(), bankroll=1000.0,
                         risk_per_trade_pct=0.5,  # huge risk %
                         max_leverage=2.0)         # tight leverage cap
     candles = _candles()
     result = mgr.execute(_short_signal(), candles, current_price=60000.0)
-    # 50% of 1000 = $500 risk; with ATR ~200, sl ~200, that's still
-    # well under the 2x * $1000 = $2000 cap, so leverage should be capped
+    # 50% of 1000 = $500 risk; with ATR ~200, uncapped notional is far
+    # above the 2x * $1000 cap, so leverage should be capped.
     assert result.requested_leverage <= 2.0 + 0.01
 
 
-def test_bulk_orders_called_with_positionTpsl_grouping() -> None:
+def test_bulk_orders_called_with_normalTpsl_grouping() -> None:
     fake = _FakeExchange()
     mgr = OrderManager(fake, _FakeInfo(), bankroll=1000.0)
     mgr.execute(_short_signal(), _candles(), current_price=60000.0)
     assert len(fake.calls) == 1
     requests, grouping = fake.calls[0]
-    assert grouping == "positionTpsl"
+    assert grouping == "normalTpsl"
     assert len(requests) == 3
     assert requests[0]["order_type"] == {"limit": {"tif": "Gtc"}}
     assert requests[1]["order_type"]["trigger"]["tpsl"] == "tp"
@@ -157,3 +167,49 @@ def test_inner_order_error_parsed() -> None:
     result = mgr.execute(_short_signal(), _candles(), current_price=60000.0)
     assert not result.filled
     assert "tick size" in (result.error or "")
+
+
+def test_no_trade_signal_rejected_not_short() -> None:
+    mgr = OrderManager(_FakeExchange(), _FakeInfo(), bankroll=1000.0)
+    sig = CascadeSignal(
+        symbol="BTC", timestamp=pd.Timestamp("2026-08-01T12:00:00Z"),
+        direction=SignalDirection.NO_TRADE, confidence=0.0,
+        reason="test", funding_rate=0.0,
+    )
+    result = mgr.execute(sig, _candles(), current_price=60000.0)
+    assert not result.filled
+    assert result.side == "no_trade"
+    assert "NO_TRADE" in (result.error or "")
+
+
+def test_refuses_to_trade_without_atr_history() -> None:
+    fake = _FakeExchange()
+    mgr = OrderManager(fake, _FakeInfo(), bankroll=1000.0)
+    result = mgr.execute(_short_signal(), _candles(n=5), current_price=60000.0)
+    assert not result.filled
+    assert result.status == "rejected"
+    assert "ATR" in (result.error or "")
+    assert fake.calls == []
+
+
+def test_orphan_entry_attempts_cancel_when_child_order_fails() -> None:
+    fake = _FakeExchange(response={
+        "status": "ok",
+        "response": {
+            "type": "order",
+            "data": {
+                "statuses": [
+                    {"resting": {"oid": 100}},
+                    {"error": "bad trigger price"},
+                    {"resting": {"oid": 102}},
+                ]
+            },
+        },
+    })
+    mgr = OrderManager(fake, _FakeInfo(), bankroll=1000.0)
+    result = mgr.execute(_short_signal(), _candles(), current_price=60000.0)
+    assert not result.filled
+    assert result.status == "orphan_error"
+    assert result.needs_reconciliation
+    assert result.cancel_attempted
+    assert fake.calls[-1] == ("cancel", [{"coin": "BTC", "oid": 100}])

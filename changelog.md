@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-08-01 — Order Manager Hard-Parts Pass (Codex)
+
+Codex reviewed `src/execution/order_manager.py` against the order manager review brief and patched the parts that can create real execution risk. Repo venv and pytest are healthy (101/101 pass). Details in `docs/2026-08-01-HANDOFF-order-manager-hard-parts.md` and the matching vault research note.
+
+**Safety changes**
+- `SignalDirection.NO_TRADE` is now rejected explicitly instead of being treated as a short.
+- ATR fallback trading removed: empty/short candle history now refuses to size a position rather than synthesizing a stop distance.
+- Default `bulk_orders` grouping switched from `positionTpsl` to `normalTpsl` (parent entry + TP/SL children). `positionTpsl` is back-burnered pending testnet proof.
+- Orphan-entry handling added: if the entry lands but a child TP/SL errors, the manager attempts `bulk_cancel` on the entry, sets `status="orphan_error"`, and flags `needs_reconciliation=True`.
+- `OrderResult` extended with `status`, `size_coin`, `needs_reconciliation`, `cancel_attempted`, per-leg statuses, and the cancel response.
+- Size rounding prefers Hyperliquid `meta()` `szDecimals`; falls back to hardcoded BTC/ETH/SOL only if the call fails.
+
+**Tests** (101/101 pass on the repo venv, 3 new + 1 renamed)
+- `test_no_trade_signal_rejected_not_short`
+- `test_refuses_to_trade_without_atr_history`
+- `test_orphan_entry_attempts_cancel_when_child_order_fails`
+- `test_bulk_orders_called_with_positionTpsl_grouping` → renamed to `..._normalTpsl_grouping`
+
+**Files**
+- `src/execution/order_manager.py`
+- `tests/test_order_manager.py`
+- `docs/2026-08-01-HANDOFF-order-manager-hard-parts.md` (durable handoff, mirrored to vault)
+
+**Out of scope (per handoff "Mavis must not" list)**
+- No mainnet orders, no risk-limit changes, no re-enable of ATR fallback, no revert to `positionTpsl` without testnet proof, no ML/DCA/martingale/new assets/venues.
+
+---
+
 ## 2026-08-01 — Testnet vs Mainnet Reality Check (CRITICAL FINDING)
 
 **The testnet backtest was a fiction. Mainnet data is fundamentally different.**
