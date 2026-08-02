@@ -20,20 +20,22 @@ After fetching 90 days of mainnet data, the funding rate distribution is **100-2
 - Best config: high=0.0020%, low=-0.0025%, +1.85% return on **6 signals** (not statistically meaningful)
 - Going to lower thresholds (more signals) makes it WORSE — 160 signals = -13%, 2700 signals = -87%
 
-**Implication: the simple "funding extreme = cascade signal" hypothesis is weak on real mainnet data.** The testnet edge was an artifact of synthetic chaotic funding.
+**Directional check (full 2160 events, 100% matched):**
+- 84% of funding events are positive (longs pay shorts) — this is just steady-state premium, not extreme positioning
+- BTC drifted from $80K to $63K in 90d while 84% of funding was positive
+- The "extreme high" funding event (>1.5e-5, 1 event): price went UP 154 bps over 24h
+- The "extreme low" funding events (BTC < -1.5e-5, 28 events): price went DOWN 24 bps over 24h
 
-**Possible next research directions:**
-1. Use the `premium` column (perp-spot gap) instead of `funding_rate`
-2. Funding RATE OF CHANGE, not level (sudden spike vs. steady-state high)
-3. Volume + funding combined signal
-4. Fetch actual liquidation events from HL API and backtest the price action AROUND them
-5. Regime filter: only trade when ATR > threshold (skip calm markets)
+**Implication: the simple "funding extreme = cascade signal" hypothesis is structurally wrong on this market.** Funding is too small, too constant, and follows trend rather than predicting reversal. The testnet edge was an artifact of synthetic chaotic funding.
+
+**Where the real edge probably lives:** actual liquidation EVENTS, not inferred from funding. Hyperliquid publishes liquidation data on-chain. A signal based on real liquidations (price impact, volume signature, OI drop) is the next research direction.
 
 **Code:**
 - `scripts/fetch_historical.py` — `HYPERLIQUID_ENV` env var (testnet | mainnet); filenames now include env suffix
 - `scripts/run_backtest.py` — `_find_data()` prefers mainnet > testnet, longest lookback first
 - `scripts/mainnet_sweep.py` — mainnet-scale parameter sweep (NEW)
 - `scripts/_funding_dist.py` and `scripts/_debug_loader.py` — debugging aids (can be removed)
+- `scripts/_funding_vs_price_v2.py` — directional check (proves strategy is structurally wrong)
 - Data: 90d BTC+ETH mainnet, 90d BTC+ETH testnet, 30d BTC+ETH testnet all in `data/`
 
 ---
