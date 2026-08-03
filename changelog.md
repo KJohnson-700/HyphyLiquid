@@ -4,6 +4,17 @@
 
 ---
 
+## 2026-08-03 - Secret ignore hardening
+
+Codex tightened `.gitignore` for local secrets and credential exports.
+
+**What changed**
+- `.env.*` files are now ignored while `.env.example` stays tracked.
+- Added ignore patterns for credential JSON, wallet files, private keys, certs, token dumps, MiniMax config, and external data provider local configs.
+- Ran a tracked-file secret-shaped scan; hits were placeholders/env-var references, not committed secret values.
+
+---
+
 ## 2026-08-03 - External liquidation data source sweep
 
 Codex used MiniMax as a low-cost scout for external Hyperliquid data sources and logged the acceleration plan.
