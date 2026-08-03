@@ -1,7 +1,7 @@
 """
 HyphyLiquid - Multi-channel public WebSocket collector.
 
-Subscribes to public, no-auth WebSocket channels for BTC, ETH, SOL, HYPE:
+Subscribes to public, no-auth WebSocket channels for BTC, ETH, SOL, HYPE, DOGE, BNB:
   - trades         (every public trade, real-time)
   - l2Book         (top-of-book depth, 10 levels, real-time)
   - candle         (1m candle updates — needed for scalp time horizons)
@@ -34,7 +34,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import websocket  # from hyperliquid SDK's deps
 
 WS_URL = "wss://api.hyperliquid.xyz/ws"
-SYMBOLS = ("BTC", "ETH", "SOL", "HYPE")
+SYMBOLS = ("BTC", "ETH", "SOL", "HYPE", "DOGE", "BNB")
 RECONNECT_DELAY_S = 5
 DATA_ROOT = PROJECT_ROOT / "data"
 

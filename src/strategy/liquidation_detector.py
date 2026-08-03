@@ -59,9 +59,39 @@ BURST_TOTAL_NOTIONAL = 1_000_000.0      # $1M in <2s same direction = likely liq
 BURST_MAX_DURATION_MS = 2_000           # 2 second window
 PRICE_CONSTANCY_PCT = 0.001             # fills within 0.1% of each other = "constant price"
 
+# Per-symbol thresholds. Alts have smaller per-trade notionals, so the
+# BTC/ETH defaults would never fire on them. Calibrated to the asset's
+# typical trade size; revisit if a specific alt is under/over-firing.
+DEFAULT_THRESHOLDS = {
+    "single_trade_min": SINGLE_TRADE_MIN_NOTIONAL,
+    "burst_total_min": BURST_TOTAL_NOTIONAL,
+    "burst_window_ms": BURST_MAX_DURATION_MS,
+    "price_constancy_pct": PRICE_CONSTANCY_PCT,
+}
+
+PER_SYMBOL_THRESHOLDS: dict[str, dict] = {
+    # BTC: use defaults (500k / 1M)
+    "ETH":  {"single_trade_min": 250_000.0, "burst_total_min": 500_000.0},
+    "SOL":  {"single_trade_min": 100_000.0, "burst_total_min": 250_000.0},
+    "HYPE": {"single_trade_min": 100_000.0, "burst_total_min": 250_000.0},
+    "DOGE": {"single_trade_min": 50_000.0,  "burst_total_min": 150_000.0},
+    "BNB":  {"single_trade_min": 100_000.0, "burst_total_min": 250_000.0},
+    # BTC: explicit so it shows up in the table
+    "BTC":  {"single_trade_min": 500_000.0, "burst_total_min": 1_000_000.0},
+}
+
+
+def thresholds_for(symbol: str) -> dict:
+    """Return the threshold dict for a symbol, falling back to defaults."""
+    return {**DEFAULT_THRESHOLDS, **PER_SYMBOL_THRESHOLDS.get(symbol, {})}
+
 
 class LiquidationDetector:
-    """Stateful detector: feed trades, get liquidation events out."""
+    """Stateful detector: feed trades, get liquidation events out.
+
+    Thresholds default to BTC's. Pass per_symbol=True in __init__ to
+    use PER_SYMBOL_THRESHOLDS (the detector then picks thresholds per
+    trade based on trade.symbol)."""
 
     def __init__(
         self,
@@ -69,29 +99,50 @@ class LiquidationDetector:
         burst_total_min: float = BURST_TOTAL_NOTIONAL,
         burst_window_ms: int = BURST_MAX_DURATION_MS,
         price_constancy_pct: float = PRICE_CONSTANCY_PCT,
+        per_symbol: bool = False,
     ):
         self.single_trade_min = single_trade_min
         self.burst_total_min = burst_total_min
         self.burst_window_ms = burst_window_ms
         self.price_constancy_pct = price_constancy_pct
+        self.per_symbol = per_symbol
         # Per-symbol rolling window of recent trades (for burst detection)
         self._recent: dict[str, List[TradeEvent]] = defaultdict(list)
         self.events: List[LiquidationEvent] = []
+
+    def _thresholds(self, symbol: str) -> tuple[float, float, int, float]:
+        if self.per_symbol:
+            t = thresholds_for(symbol)
+            return (
+                t["single_trade_min"],
+                t["burst_total_min"],
+                t["burst_window_ms"],
+                t["price_constancy_pct"],
+            )
+        return (
+            self.single_trade_min,
+            self.burst_total_min,
+            self.burst_window_ms,
+            self.price_constancy_pct,
+        )
 
     def feed(self, trade: TradeEvent) -> List[LiquidationEvent]:
         """Feed a single trade; return any liquidation events detected."""
         new_events: List[LiquidationEvent] = []
         sym = trade.symbol
+        single_trade_min, burst_total_min, burst_window_ms, price_constancy_pct = (
+            self._thresholds(sym)
+        )
         recent = self._recent[sym]
 
-        # Drop trades older than the burst window
-        cutoff = trade.timestamp_ms - self.burst_window_ms
+        # Drop trades older than the burst window (per-symbol)
+        cutoff = trade.timestamp_ms - burst_window_ms
         self._recent[sym] = [t for t in recent if t.timestamp_ms >= cutoff]
         self._recent[sym].append(trade)
         recent = self._recent[sym]
 
-        # Check 1: Single very large trade
-        if trade.notional >= self.single_trade_min:
+        # Check 1: Single very large trade (per-symbol threshold)
+        if trade.notional >= single_trade_min:
             ev = LiquidationEvent(
                 symbol=sym,
                 timestamp_ms=trade.timestamp_ms,
@@ -113,7 +164,7 @@ class LiquidationDetector:
             if len(same_dir) < 2:
                 continue
             total = sum(t.notional for t in same_dir)
-            if total < self.burst_total_min:
+            if total < burst_total_min:
                 continue
             prices = [t.price for t in same_dir]
             avg_p = sum(prices) / len(prices)
@@ -124,7 +175,7 @@ class LiquidationDetector:
                 sizes[i] >= sizes[i+1] * 0.7  # each next size within 70% of prior
                 for i in range(len(sizes) - 1)
             ) if len(sizes) >= 2 else False
-            if price_range <= self.price_constancy_pct and decreasing and len(same_dir) >= 3:
+            if price_range <= price_constancy_pct and decreasing and len(same_dir) >= 3:
                 ev = LiquidationEvent(
                     symbol=sym,
                     timestamp_ms=trade.timestamp_ms,
@@ -142,7 +193,7 @@ class LiquidationDetector:
                 new_events.append(ev)
                 # Clear window so we don't re-detect same burst
                 self._recent[sym] = []
-            elif price_range <= self.price_constancy_pct and len(same_dir) >= 5:
+            elif price_range <= price_constancy_pct and len(same_dir) >= 5:
                 # Same-price burst without decreasing pattern
                 ev = LiquidationEvent(
                     symbol=sym,

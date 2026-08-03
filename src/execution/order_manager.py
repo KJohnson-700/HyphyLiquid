@@ -146,7 +146,7 @@ class OrderManager:
         return notional / entry, notional
 
     def _round_to_tick(self, symbol: str, price: float) -> float:
-        ticks = {"BTC": 1.0, "ETH": 0.1, "SOL": 0.01, "HYPE": 0.001}
+        ticks = {"BTC": 1.0, "ETH": 0.1, "SOL": 0.01, "HYPE": 0.001, "DOGE": 0.00001, "BNB": 0.01}
         tick = ticks.get(symbol, 0.01)
         return round(round(price / tick) * tick, 6)
 
@@ -167,7 +167,7 @@ class OrderManager:
         asset = self._asset_meta(symbol)
         if "szDecimals" in asset:
             return round(size, int(asset["szDecimals"]))
-        decimals = {"BTC": 5, "ETH": 4, "SOL": 2, "HYPE": 2}
+        decimals = {"BTC": 5, "ETH": 4, "SOL": 2, "HYPE": 2, "DOGE": 0, "BNB": 3}
         d = decimals.get(symbol, 3)
         return round(size, d)
 

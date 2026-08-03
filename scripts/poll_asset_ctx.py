@@ -23,7 +23,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import requests
 
 INFO_URL = "https://api.hyperliquid.xyz/info"
-SYMBOLS = ("BTC", "ETH", "SOL", "HYPE")
+SYMBOLS = ("BTC", "ETH", "SOL", "HYPE", "DOGE", "BNB")
 # 1 min cadence — needed to compute OI delta inside the 1-5 min
 # `liquidation_fade_or_follow` wait window. 5 min was too coarse.
 INTERVAL_S = 60

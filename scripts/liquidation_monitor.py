@@ -175,7 +175,7 @@ def main() -> int:
     print(f"Logging to {LOG_PATH}")
     print()
 
-    detector = LiquidationDetector()
+    detector = LiquidationDetector(per_symbol=True)
     seen_tids: set = set()
 
     while True:
