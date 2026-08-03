@@ -32,6 +32,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.strategy.cascade_cluster import cluster_events
 from src.strategy.fade_or_follow_backtest import (
     Trade,
+    find_entry_idx,
     run_backtest,
     summarize,
 )
@@ -56,42 +57,54 @@ def _load_cascades(path: Path) -> list[dict]:
     return out
 
 
-def _load_candles(symbol: str, date_str: str) -> list[dict]:
-    """Load all 1m candle records for symbol on date, return list of
-    dicts with at least 't' (ms) and 'c' (close)."""
-    path = PROJECT_ROOT / "data" / "ws_candle" / f"{symbol.lower()}_{date_str}.jsonl"
-    if not path.exists():
+def _load_candles(symbol: str, candle_dir: Path | None = None) -> list[dict]:
+    """Load final 1m candle records for symbol across all collected dates.
+
+    The websocket candle stream emits many updates for the same candle.
+    Backtests need one row per minute, so keep the last update for each
+    candle open timestamp.
+    """
+    source_dir = candle_dir or PROJECT_ROOT / "data" / "ws_candle"
+    paths = sorted(source_dir.glob(f"{symbol.lower()}_*.jsonl"))
+    if not paths:
         return []
-    out = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        payload = rec.get("payload") if isinstance(rec, dict) else None
-        if not isinstance(payload, dict):
-            continue
-        if payload.get("s", "").upper() != symbol.upper():
-            continue
-        t = payload.get("t")
-        c = payload.get("c")
-        if t is None or c is None:
-            continue
-        try:
-            out.append({"t": int(t), "c": float(c), "o": float(payload.get("o", 0)),
-                        "h": float(payload.get("h", 0)), "l": float(payload.get("l", 0)),
-                        "v": float(payload.get("v", 0)), "n": int(payload.get("n", 0))})
-        except (TypeError, ValueError):
-            continue
-    out.sort(key=lambda b: b["t"])
-    return out
+    by_open: dict[int, dict] = {}
+    for path in paths:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            payload = rec.get("payload") if isinstance(rec, dict) else None
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("s", "").upper() != symbol.upper():
+                continue
+            t = payload.get("t")
+            c = payload.get("c")
+            if t is None or c is None:
+                continue
+            try:
+                by_open[int(t)] = {
+                    "t": int(t),
+                    "c": float(c),
+                    "o": float(payload.get("o", 0)),
+                    "h": float(payload.get("h", 0)),
+                    "l": float(payload.get("l", 0)),
+                    "v": float(payload.get("v", 0)),
+                    "n": int(payload.get("n", 0)),
+                }
+            except (TypeError, ValueError):
+                continue
+    return [by_open[t] for t in sorted(by_open)]
 
 
 def _print_report(summary: dict, total_cascades: int, n_cascades_evaluated: int,
-                  n_skipped_no_candles: int, n_skipped_no_exit: int) -> None:
+                  n_skipped_no_candles: int, n_skipped_stale_entry: int,
+                  n_skipped_no_exit: int) -> None:
     print()
     print("=" * 78)
     print("FADE_OR_FOLLOW BACKTEST — first results on live data")
@@ -99,6 +112,7 @@ def _print_report(summary: dict, total_cascades: int, n_cascades_evaluated: int,
     print(f"  Total cascades in file:        {total_cascades}")
     print(f"  Cascades with candle coverage:  {n_cascades_evaluated}")
     print(f"  Skipped (no candles for sym):   {n_skipped_no_candles}")
+    print(f"  Skipped (stale/no entry):       {n_skipped_stale_entry}")
     print(f"  Skipped (no exit bar):          {n_skipped_no_exit}")
     print()
     # Group by variant for the headline view
@@ -146,7 +160,13 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--horizon", type=int, default=15, help="Hold minutes (default 15)")
     parser.add_argument("--wait", type=int, default=3, help="Wait minutes for reclaim (default 3)")
-    parser.add_argument("--symbol", choices=("BTC", "ETH", "SOL", "HYPE"),
+    parser.add_argument(
+        "--max-entry-lag",
+        type=int,
+        default=2,
+        help="Skip cascades whose first eligible 1m bar is more than this many minutes after the event",
+    )
+    parser.add_argument("--symbol", choices=("BTC", "ETH", "SOL", "HYPE", "DOGE", "BNB"),
                         help="Only backtest this symbol")
     parser.add_argument("--rebuild-cascades", action="store_true",
                         help="Rebuild cascades.jsonl from liquidations.jsonl first")
@@ -166,29 +186,36 @@ def main() -> int:
         cascades = [c for c in cascades if c.get("symbol") == args.symbol]
         print(f"  filtered to {len(cascades)} {args.symbol} cascades")
 
-    # Determine the date of candle data we have
-    # 1m candles are written to {sym}_YYYY-MM-DD.jsonl
-    # For our 2026-08-02 runs, the candle data is in data/ws_candle/
-    candle_date = "2026-08-02"
-
     # Load candles per symbol
     symbols = sorted({c.get("symbol") for c in cascades if c.get("symbol")})
     candles_by_symbol: dict[str, list[dict]] = {}
     for sym in symbols:
-        candles_by_symbol[sym] = _load_candles(sym, candle_date)
+        candles_by_symbol[sym] = _load_candles(sym)
         print(f"  {sym}: {len(candles_by_symbol[sym])} 1m candles loaded")
 
     # Pre-filter cascades
     total = len(cascades)
     n_skipped_no_candles = sum(1 for c in cascades if not candles_by_symbol.get(c.get("symbol")))
     n_evaluated_pre = sum(1 for c in cascades if candles_by_symbol.get(c.get("symbol")))
+    n_skipped_stale_entry = 0
+    n_skipped_no_exit = 0
+    for c in cascades:
+        candles = candles_by_symbol.get(c.get("symbol"))
+        if not candles:
+            continue
+        entry_idx = find_entry_idx(candles, c.get("start_ts", ""), args.max_entry_lag)
+        if entry_idx is None:
+            n_skipped_stale_entry += 1
+            continue
+        if entry_idx + args.horizon >= len(candles):
+            n_skipped_no_exit += 1
     trades = run_backtest(
         cascades,
         candles_by_symbol,
         horizon_minutes=args.horizon,
         wait_minutes=args.wait,
+        max_entry_lag_minutes=args.max_entry_lag,
     )
-    n_skipped_no_exit = n_evaluated_pre - len({t.cascade_start_ts for t in trades})
 
     # Write trades
     TRADES_PATH.write_text(
@@ -199,7 +226,14 @@ def main() -> int:
 
     # Summarize
     summary = summarize(trades)
-    _print_report(summary, total, n_evaluated_pre, n_skipped_no_candles, n_skipped_no_exit)
+    _print_report(
+        summary,
+        total,
+        n_evaluated_pre,
+        n_skipped_no_candles,
+        n_skipped_stale_entry,
+        n_skipped_no_exit,
+    )
 
     return 0
 

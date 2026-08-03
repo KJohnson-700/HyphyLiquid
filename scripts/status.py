@@ -27,6 +27,7 @@ V1_TRADE_SYMBOLS = ("BTC", "ETH")
 RESEARCH_SYMBOLS = ("SOL", "HYPE", "DOGE", "BNB")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 VAULT = Path(r"C:\Users\AbuBa\Documents\Obsidian Vault\projects\gold-silver-hyperliquid")
 LOG_DIR = PROJECT_ROOT / "logs"
 
@@ -240,7 +241,7 @@ def _hms(seconds: float) -> str:
 
 
 def show_backtest_readiness() -> None:
-    """Show progress toward the auto-backtest guard (100 events AND 24h old)."""
+    """Show progress toward the rebuild/backtest trigger."""
     _section("BACKTEST READINESS")
     path = PROJECT_ROOT / "data" / "liquidations.jsonl"
     if not path.exists():
@@ -292,9 +293,26 @@ def show_backtest_readiness() -> None:
     print(f"  Age:       {age_hours:5.2f}h / {BACKTEST_GUARD_HOURS}h  (oldest: {oldest_ts.strftime('%H:%M:%S UTC')})")
     print(f"    {_bar(time_pct)}  {'READY' if time_ok else 'waiting'}")
     print()
-    if count_ok and time_ok:
-        print("  >>> AUTO-BACKTEST SHOULD HAVE RUN. Check cron output. <<<")
-    else:
+    try:
+        from src.strategy.rebuild_trigger import check_should_rebuild
+
+        should_fire, info = check_should_rebuild()
+        print("  Rebuild trigger:")
+        print(f"    new_rows_since_rebuild: {info['new_rows']} / 150")
+        print(f"    mature_new_rows:        {info['mature_new_rows']} / 150")
+        rebuild_age = info.get("last_rebuild_age_min")
+        if rebuild_age is None:
+            print("    last_rebuild_age:       None")
+        else:
+            print(f"    last_rebuild_age:       {rebuild_age:.1f}m / 60m")
+        print(f"    verdict:                {'FIRE' if should_fire else 'HOLD'}")
+        if info.get("reasons"):
+            print(f"    reasons:                {info['reasons']}")
+        return
+    except Exception as exc:
+        print(f"  Rebuild trigger unavailable: {exc}")
+
+    if not (count_ok and time_ok):
         bits = []
         if not count_ok:
             need = BACKTEST_GUARD_EVENTS - n

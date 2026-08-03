@@ -2,8 +2,8 @@
 
 Decides when to run scripts/build_cascades.py and
 scripts/run_fade_or_follow_backtest.py based on:
-  - liquidations.jsonl has 150+ new rows since last rebuild
-  - latest liquidation event is at least 30 minutes old
+  - liquidations.jsonl has 150+ mature new rows since last rebuild
+  - mature means the event is at least 30 minutes old
   - last rebuild was at least 60 minutes ago
   - daily fallback at 00:15 PT
 
@@ -137,6 +137,35 @@ def last_liquidation_ts_ms(path: Path = LIQUIDATIONS_PATH) -> Optional[int]:
     return last_ms
 
 
+def count_mature_new_liquidations(
+    path: Path,
+    baseline_count: int,
+    mature_before_ms: int,
+) -> int:
+    """Count rows after baseline_count whose event timestamp is mature.
+
+    Live liquidation streams may keep appending fresh events. Requiring the
+    latest event in the whole file to be 30+ minutes old can starve rebuilds in
+    active markets, so the trigger instead counts only the new rows that
+    already have enough future candle coverage.
+    """
+    if not path.exists():
+        return 0
+    mature = 0
+    row_num = 0
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            row_num += 1
+            if row_num <= baseline_count:
+                continue
+            ms = parse_liquidation_ts(line)
+            if ms is not None and ms <= mature_before_ms:
+                mature += 1
+    return mature
+
+
 # ----------------------------------------------------------------------------
 # Baseline file (data/.rebuild_baseline.json)
 # ----------------------------------------------------------------------------
@@ -200,6 +229,7 @@ def check_should_rebuild(
 
     info: dict[str, Any] = {
         "new_rows": 0,
+        "mature_new_rows": 0,
         "last_liq_age_min": None,
         "last_rebuild_age_min": None,
         "daily_fallback": False,
@@ -222,6 +252,12 @@ def check_should_rebuild(
     base_count = baseline.get("liquidation_count")
     if isinstance(base_count, int):
         info["new_rows"] = info["current_liquidation_count"] - base_count
+        mature_before = now_utc - timedelta(minutes=THRESHOLD_LAST_LIQ_AGE_MIN)
+        info["mature_new_rows"] = count_mature_new_liquidations(
+            liquidations_path,
+            base_count,
+            int(mature_before.timestamp() * 1000),
+        )
 
     # --- Daily fallback check ---
     now_pt = _now_pt(now_utc)
@@ -247,13 +283,9 @@ def check_should_rebuild(
         info["reasons"].append("no baseline yet (initial run pending)")
         return False, info
 
-    if info["new_rows"] < THRESHOLD_NEW_ROWS:
+    if info["mature_new_rows"] < THRESHOLD_NEW_ROWS:
         info["reasons"].append(
-            f"new_rows {info['new_rows']} < {THRESHOLD_NEW_ROWS}"
-        )
-    if info["last_liq_age_min"] < THRESHOLD_LAST_LIQ_AGE_MIN:
-        info["reasons"].append(
-            f"last_liq_age {info['last_liq_age_min']:.1f} < {THRESHOLD_LAST_LIQ_AGE_MIN} min"
+            f"mature_new_rows {info['mature_new_rows']} < {THRESHOLD_NEW_ROWS}"
         )
     if info["last_rebuild_age_min"] is None or info["last_rebuild_age_min"] < THRESHOLD_LAST_REBUILD_AGE_MIN:
         info["reasons"].append(
@@ -261,8 +293,7 @@ def check_should_rebuild(
         )
 
     should_fire = (
-        info["new_rows"] >= THRESHOLD_NEW_ROWS
-        and info["last_liq_age_min"] >= THRESHOLD_LAST_LIQ_AGE_MIN
+        info["mature_new_rows"] >= THRESHOLD_NEW_ROWS
         and info["last_rebuild_age_min"] is not None
         and info["last_rebuild_age_min"] >= THRESHOLD_LAST_REBUILD_AGE_MIN
     )
@@ -317,6 +348,7 @@ def main() -> int:  # pragma: no cover
     should_fire, info = check_should_rebuild()
     print(f"current_liquidation_count: {info['current_liquidation_count']}")
     print(f"new_rows_since_rebuild:    {info['new_rows']} (need >= {THRESHOLD_NEW_ROWS})")
+    print(f"mature_new_rows:           {info['mature_new_rows']} (need >= {THRESHOLD_NEW_ROWS})")
     last_liq = info['last_liq_age_min']
     print(f"last_liq_age_min:          {last_liq:.1f}" if last_liq is not None else "last_liq_age_min:          None")
     last_rebuild = info['last_rebuild_age_min']

@@ -58,6 +58,7 @@ class Trade:
     exit_price: float
     return_pct: float
     bars_held: int
+    entry_lag_s: float
     reclaim_detected: bool
     reason: str
 
@@ -104,21 +105,39 @@ def _bars_held(entry_idx: int, exit_idx: int) -> int:
     return max(0, exit_idx - entry_idx)
 
 
-def find_entry_idx(candles: list[dict], cascade_start_ts: str) -> int | None:
-    """Index of the first 1m bar whose open time is >= cascade start."""
+def _bar_dt(bar: dict) -> datetime | None:
+    t = bar.get("t")
+    if t is None:
+        t = bar.get("payload", {}).get("t")
+    if t is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(t) / 1000, tz=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def find_entry_idx(
+    candles: list[dict],
+    cascade_start_ts: str,
+    max_entry_lag_minutes: int | None = 2,
+) -> int | None:
+    """Index of the first 1m bar after the cascade start.
+
+    If candle capture starts after the event, skip instead of entering
+    minutes or hours late. This prevents backtests from using unrelated
+    later candles for early cascades.
+    """
     cs = _parse_ts(cascade_start_ts)
     for i, c in enumerate(candles):
-        try:
-            t = c.get("t")
-            if t is None:
-                # payload-wrapped shape
-                t = c.get("payload", {}).get("t")
-            if t is None:
-                continue
-            bar_open = datetime.fromtimestamp(int(t) / 1000, tz=timezone.utc)
-        except (TypeError, ValueError):
+        bar_open = _bar_dt(c)
+        if bar_open is None:
             continue
-        if bar_open >= cs:
+        if bar_open > cs:
+            if max_entry_lag_minutes is not None:
+                lag_s = (bar_open - cs).total_seconds()
+                if lag_s > max_entry_lag_minutes * 60:
+                    return None
             return i
     return None
 
@@ -128,6 +147,7 @@ def run_backtest(
     candles_by_symbol: dict[str, list[dict]],
     horizon_minutes: int = 15,
     wait_minutes: int = 3,
+    max_entry_lag_minutes: int | None = 2,
 ) -> list[Trade]:
     """Run all three variants for each cascade. Returns flat list of trades."""
     out: list[Trade] = []
@@ -141,7 +161,7 @@ def run_backtest(
         candles = candles_by_symbol.get(sym)
         if not candles:
             continue
-        entry_idx = find_entry_idx(candles, start_ts)
+        entry_idx = find_entry_idx(candles, start_ts, max_entry_lag_minutes)
         if entry_idx is None:
             continue
         exit_idx_target = entry_idx + horizon_minutes
@@ -156,6 +176,7 @@ def run_backtest(
             continue
         if entry_px <= 0 or exit_px <= 0:
             continue
+        entry_lag_s = (_bar_dt(entry_bar) - _parse_ts(start_ts)).total_seconds() if _bar_dt(entry_bar) else 0.0
         # Wait window
         window_end = min(entry_idx + wait_minutes, len(candles) - 1)
         reclaim_detected = False
@@ -189,6 +210,7 @@ def run_backtest(
                     _return_pct(_fade_direction(side), entry_px, exit_px), 4
                 ),
                 bars_held=horizon_minutes,
+                entry_lag_s=round(entry_lag_s, 3),
                 reclaim_detected=reclaim_detected,
                 reason="always fade (no filter)",
             )
@@ -228,6 +250,11 @@ def run_backtest(
                                     _return_pct(_fade_direction(side), rb_close, ex_close), 4
                                 ),
                                 bars_held=horizon_minutes,
+                                entry_lag_s=round(
+                                    ((_bar_dt(reclaim_bar) - _parse_ts(start_ts)).total_seconds()
+                                     if _bar_dt(reclaim_bar) else 0.0),
+                                    3,
+                                ),
                                 reclaim_detected=True,
                                 reason=f"reclaim at bar {reclaim_idx - entry_idx} into wait",
                             )
@@ -266,6 +293,11 @@ def run_backtest(
                                     _return_pct(_continuation_direction(side), ec_px, ex_close), 4
                                 ),
                                 bars_held=horizon_minutes,
+                                entry_lag_s=round(
+                                    ((_bar_dt(entry_continuation) - _parse_ts(start_ts)).total_seconds()
+                                     if _bar_dt(entry_continuation) else 0.0),
+                                    3,
+                                ),
                                 reclaim_detected=False,
                                 reason=f"no reclaim in {wait_minutes}min wait -> continuation",
                             )

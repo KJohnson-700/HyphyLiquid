@@ -32,6 +32,7 @@ Algorithm:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from collections import defaultdict
 from typing import Any
 
 
@@ -56,50 +57,55 @@ def cluster_events(events: list[dict], time_window_s: int = 60) -> list[dict]:
     if not events:
         return []
 
-    # Sort by ts so the merge pass is O(n).
-    sorted_events = sorted(events, key=lambda e: e.get("ts", ""))
-
     cascades: list[dict] = []
-    current: dict[str, Any] | None = None
-    window_td = None  # type: ignore[assignment]
-
-    for ev in sorted_events:
+    by_key: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for ev in events:
         sym = ev.get("symbol")
         side = ev.get("side")
         ts = ev.get("ts")
         if not sym or not side or not ts:
             continue
-        notional = float(ev.get("total_notional", 0) or 0)
-        n_fills = int(ev.get("n_fills", 0) or 0)
-        price_avg = float(ev.get("price_avg", 0) or 0)
-        confidence = float(ev.get("confidence", 0) or 0)
+        by_key[(str(sym), str(side))].append(ev)
 
-        ev_dt = _parse_ts(ts)
-        if current is None:
-            current = _new_cluster(sym, side, ts, notional, n_fills, price_avg, confidence)
-            window_td = ev_dt
-            continue
+    for (sym, side), grouped_events in by_key.items():
+        sorted_events = sorted(grouped_events, key=lambda e: e.get("ts", ""))
+        current: dict[str, Any] | None = None
+        window_dt: datetime | None = None
 
-        same_direction = sym == current["symbol"] and side == current["side"]
-        gap_s = (ev_dt - window_td).total_seconds()
-        if same_direction and gap_s <= time_window_s:
-            # Extend cluster. VWAP math: track total size = sum_i(notional_i/price_i).
-            current["end_ts"] = ts
-            current["total_notional"] += notional
-            current["n_fills"] += n_fills
-            current["total_size"] += (notional / price_avg) if price_avg > 0 else 0.0
-            current["max_confidence"] = max(current["max_confidence"], confidence)
-            current["n_events"] += 1
-            window_td = ev_dt
-        else:
-            # Finalize current, start new cluster
+        for ev in sorted_events:
+            ts = ev.get("ts")
+            if not ts:
+                continue
+            notional = float(ev.get("total_notional", 0) or 0)
+            n_fills = int(ev.get("n_fills", 0) or 0)
+            price_avg = float(ev.get("price_avg", 0) or 0)
+            confidence = float(ev.get("confidence", 0) or 0)
+
+            ev_dt = _parse_ts(ts)
+            if current is None:
+                current = _new_cluster(sym, side, ts, notional, n_fills, price_avg, confidence)
+                window_dt = ev_dt
+                continue
+
+            gap_s = (ev_dt - window_dt).total_seconds() if window_dt else float("inf")
+            if gap_s <= time_window_s:
+                # Extend cluster. VWAP math: track total size = sum_i(notional_i/price_i).
+                current["end_ts"] = ts
+                current["total_notional"] += notional
+                current["n_fills"] += n_fills
+                current["total_size"] += (notional / price_avg) if price_avg > 0 else 0.0
+                current["max_confidence"] = max(current["max_confidence"], confidence)
+                current["n_events"] += 1
+                window_dt = ev_dt
+            else:
+                cascades.append(_finalize(current))
+                current = _new_cluster(sym, side, ts, notional, n_fills, price_avg, confidence)
+                window_dt = ev_dt
+
+        if current is not None:
             cascades.append(_finalize(current))
-            current = _new_cluster(sym, side, ts, notional, n_fills, price_avg, confidence)
-            window_td = ev_dt
 
-    if current is not None:
-        cascades.append(_finalize(current))
-    return cascades
+    return sorted(cascades, key=lambda c: c.get("start_ts", ""))
 
 
 def _new_cluster(

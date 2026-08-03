@@ -83,6 +83,10 @@ class SnapshotIndex:
             self.records = [r for _, r in paired]
 
     def nearest(self, target_ms: int) -> dict | None:
+        nearest = self.nearest_with_delta(target_ms)
+        return nearest[0] if nearest else None
+
+    def nearest_with_delta(self, target_ms: int) -> tuple[dict, float] | None:
         if not self.timestamps:
             return None
         idx = bisect_left(self.timestamps, target_ms)
@@ -94,7 +98,8 @@ class SnapshotIndex:
         if not candidates:
             return None
         candidates.sort(key=lambda x: abs(x[0] - target_ms))
-        return candidates[0][1]
+        ts, rec = candidates[0]
+        return rec, (ts - target_ms) / 1000.0
 
 
 def _extract_ts(rec: dict) -> int | None:
@@ -106,6 +111,10 @@ def _extract_ts(rec: dict) -> int | None:
         p = rec["payload"]
         if isinstance(p.get("time"), (int, float)):
             return int(p["time"])
+        if isinstance(p.get("ts"), (int, float)):
+            return int(p["ts"])
+        if isinstance(p.get("t"), (int, float)):
+            return int(p["t"])
     if "poll_ts" in rec and isinstance(rec["poll_ts"], str):
         try:
             dt = datetime.fromisoformat(rec["poll_ts"])
@@ -149,8 +158,14 @@ def main() -> int:
     )
     parser.add_argument(
         "--only-symbol",
-        choices=("BTC", "ETH", "SOL", "HYPE"),
+        choices=("BTC", "ETH", "SOL", "HYPE", "DOGE", "BNB"),
         help="Only cluster events for this symbol.",
+    )
+    parser.add_argument(
+        "--max-snapshot-lag",
+        type=int,
+        default=120,
+        help="Max absolute seconds from cascade to nearest l2/ctx snapshot. Older/future snapshots become null.",
     )
     args = parser.parse_args()
 
@@ -204,29 +219,48 @@ def main() -> int:
                     ts_dt = ts_dt.replace(tzinfo=timezone.utc)
                 ts_ms = int(ts_dt.timestamp() * 1000)
 
-                l2_rec = l2_idx.get(sym, SnapshotIndex(PROJECT_ROOT / "data" / "ws_l2book" / f"{sym.lower()}_2026-08-02.jsonl")).nearest(ts_ms)
-                ctx_rec = ctx_idx.get(sym, SnapshotIndex(PROJECT_ROOT / "data" / "asset_ctx" / f"{sym.lower()}_2026-08-02.jsonl")).nearest(ts_ms)
+                l2_index = l2_idx.get(sym)
+                ctx_index = ctx_idx.get(sym)
+                l2_nearest = l2_index.nearest_with_delta(ts_ms) if l2_index else None
+                ctx_nearest = ctx_index.nearest_with_delta(ts_ms) if ctx_index else None
+                l2_rec = (
+                    l2_nearest[0]
+                    if l2_nearest and abs(l2_nearest[1]) <= args.max_snapshot_lag
+                    else None
+                )
+                ctx_rec = (
+                    ctx_nearest[0]
+                    if ctx_nearest and abs(ctx_nearest[1]) <= args.max_snapshot_lag
+                    else None
+                )
+                l2_delta_s = l2_nearest[1] if l2_nearest and l2_rec else None
+                ctx_delta_s = ctx_nearest[1] if ctx_nearest and ctx_rec else None
                 l2_payload = l2_rec.get("payload") if isinstance(l2_rec, dict) else None
                 book_features = _bbo_from_l2book(l2_payload)
                 ctx_features = _asset_ctx_features(ctx_rec)
 
-                # VWAP sanity check (notional / n_fills)
+                # VWAP sanity check and average fill notional are distinct.
                 try:
                     n = int(c.get("n_fills", 0)) or 0
                     notional = float(c.get("total_notional", 0)) or 0.0
-                    vwap_check = (notional / n) if n > 0 else None
+                    avg_fill_notional = (notional / n) if n > 0 else None
                 except (TypeError, ValueError):
-                    vwap_check = None
+                    avg_fill_notional = None
 
                 merged = {
                     **c,
                     "event_ts": c["start_ts"],
                     "event_ts_ms": ts_ms,
-                    "vwap_check": vwap_check,
-                    "bbo_source_ts": l2_payload.get("time") if isinstance(l2_payload, dict) else None,
-                    "l2_delta_s": round(((l2_payload.get("time") - ts_ms) / 1000.0), 1) if isinstance(l2_payload, dict) and l2_payload.get("time") else None,
+                    "vwap_check": c.get("event_vwap"),
+                    "avg_fill_notional": avg_fill_notional,
+                    "bbo_source_ts": (
+                        l2_payload.get("ts") or l2_payload.get("time")
+                        if isinstance(l2_payload, dict) else None
+                    ),
+                    "l2_delta_s": round(l2_delta_s, 3) if l2_delta_s is not None else None,
                     **book_features,
                     **ctx_features,
+                    "ctx_delta_s": round(ctx_delta_s, 3) if ctx_delta_s is not None else None,
                     "post_1m_return": None,
                     "post_5m_return": None,
                     "post_15m_return": None,

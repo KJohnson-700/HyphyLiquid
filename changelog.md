@@ -4,6 +4,99 @@
 
 ---
 
+## 2026-08-03 - Mature-row rebuild trigger fix
+
+Codex fixed the rebuild trigger so active liquidation streams do not starve the backtest cycle.
+
+**What changed**
+- `src/strategy/rebuild_trigger.py` now counts `mature_new_rows`: rows after the baseline line count whose event timestamps are at least 30 minutes old.
+- `scripts/run_rebuild_cycle.py` now prints both total new rows and mature new rows.
+- This replaces the overly strict behavior where the latest event in the whole file had to be 30+ minutes old, which can fail forever during active markets.
+
+**Verification**
+- Trigger check now fires with 1,226 mature new rows even though the newest liquidation is only a few minutes old.
+- Rebuild cycle succeeded: 2,593 raw liquidation rows -> 621 cascades.
+
+**Updated strategy read**
+- BTC B-side focused report deteriorated on the larger sample: `reclaim_fade` n=85, PF 0.72; `baseline_fade` n=122, PF 0.81.
+- HYPE B-side reached n=10 but remains below promotion threshold: PF 1.34, median +0.0207%.
+- No lane should be promoted to execution.
+
+---
+
+## 2026-08-03 - Lane diagnostics added
+
+Codex added `--diagnostics` to `scripts/run_lane_backtest.py` and diagnostic helpers in `src/strategy/lane_backtest.py`.
+
+**What it shows**
+- Per-symbol, side, direction, exit-reason, and band-width bucket summaries.
+- Largest-win share of gross profit, so outlier-carried edges are visible.
+
+**Current read**
+- BTC/ETH blended edge is flat: all lane trades together PF ~1.00.
+- BTC B-side fade is the only strong BTC/ETH pocket so far: n=120, PF 1.64.
+- BTC A-side fade is bad: n=118, PF 0.66.
+- ETH is flat on both sides.
+- HYPE B-side alt range scalp is the only alt pocket worth watching: n=7, PF 1.92, but still too small.
+- HYPE compressed-band trades are bad in this sample: n=6, PF 0.15.
+
+**Decision**
+- No execution promotion.
+- Marvis should run both lane backtests with `--diagnostics` after each rebuild and send changes to Codex/Slim.
+
+**Follow-up**
+- Added `--side A|B` to `scripts/run_lane_backtest.py` so focused reports can isolate BTC B-side and HYPE B-side without overwriting blended output files.
+- Current BTC B-side focused report: `reclaim_fade` n=42, PF 1.81, median +0.0248%; `baseline_fade` n=60, PF 1.65, median +0.0096%.
+- The next serious research candidate is BTC B-side-only reclaim fade, with BTC B-side baseline fade as the control.
+
+---
+
+## 2026-08-03 - Lane backtester scaffold
+
+Codex added a repo-native lane backtester so BTC/ETH v1 research and alt research can be tested separately without moving the project into TradingView or a third-party bot framework.
+
+**What changed**
+- Added `src/strategy/lane_backtest.py`.
+- Added `scripts/run_lane_backtest.py`.
+- Added `tests/test_lane_backtest.py`.
+- Added `docs/2026-08-03-HANDOFF-lane-backtester.md` for Claude Code extension work.
+
+**Lane behavior**
+- `btc_eth_fade_or_follow` reuses the existing BTC/ETH backtest path.
+- `alt_range_liq_scalp` is research-only for SOL/HYPE/DOGE/BNB.
+- The alt lane tests liquidation bursts at Bollinger extremes, requires a close back inside the band, fades toward mid-band, stops beyond the outer band, and subtracts round-trip costs.
+
+**Verification**
+- Focused tests passed: 46 tests.
+- Current alt data is not decision-grade: 16 alt cascades produced only 2 confirmed range-lane trades.
+
+---
+
+## 2026-08-02 (late) - Clustering + timing guard run on cleaned data
+
+Codex took the hard-parts side of the role split and reran the cascade/backtest path on the cleaned live data.
+
+**What changed**
+- `cascade_cluster.py` keeps liquidation clusters isolated by `(symbol, side)` so interleaved symbols cannot split a valid BTC/ETH cascade.
+- `event_features.py` keeps `vwap_check` equal to event VWAP and moves average fill size into `avg_fill_notional`.
+- `build_cascades.py` applies bounded nearest-snapshot joins and rejects L2/context snapshots outside `--max-snapshot-lag`.
+- `run_fade_or_follow_backtest.py` reads every `data/ws_candle/{symbol}_*.jsonl` file instead of one hard-coded date, deduping each 1m candle to the final websocket update.
+- `fade_or_follow_backtest.py` enforces `--max-entry-lag` so old cascades cannot enter against candles that start too late.
+
+**Verification**
+- Syntax check passed for the touched strategy/backtest scripts.
+- Focused unittest suite passed: 40 tests.
+- Latest rebuild: 680 raw liquidation events -> 183 cascades.
+- Latest guarded 15m backtest loaded all candle coverage: BTC/ETH/SOL/HYPE 950 1m candles each, DOGE 175.
+
+**Read on the data**
+- BTC baseline fade remains mildly positive: n=69, WR 52.2%, avg +0.0236%, PF 1.66.
+- ETH reclaim fade remains better than ETH baseline, but the edge cooled after loading the newer candle files: n=29, WR 48.3%, avg +0.0275%, PF 1.51.
+- BTC/ETH failed-reclaim continuation is not supported by this sample.
+- SOL/HYPE/DOGE remain research-only; samples are too small for execution decisions.
+
+---
+
 ## 2026-08-02 (late) — Two-track strategy split, two new research docs
 
 User finished the focused BTC/ETH strategy sweep and committed the result to `docs/2026-08-02-RESEARCH-btc-eth-hyperliquid-strategy-sweep.md`. A second hybrid-strategies doc (`docs/2026-08-02-RESEARCH-hybrid-liquidation-strategies.md`) covers the SOL/HYPE / shared-primitives framing.

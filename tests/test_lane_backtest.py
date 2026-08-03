@@ -1,0 +1,153 @@
+"""Tests for lane-aware backtesting."""
+import sys
+import unittest
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.strategy.lane_backtest import (  # noqa: E402
+    _range_confirmation,
+    bollinger_at,
+    diagnostic_breakdown,
+    run_alt_range_liq_scalp,
+    summarize_lane_trades,
+)
+
+
+def _ms(ts: str) -> int:
+    return int(datetime.fromisoformat(ts).timestamp() * 1000)
+
+
+def _bar(t_ms: int, o=100, h=101, l=99, c=100, v=1000, n=10) -> dict:
+    return {"t": t_ms, "o": o, "h": h, "l": l, "c": c, "v": v, "n": n}
+
+
+def _cascade(start_ts: str, sym="SOL", side="B") -> dict:
+    return {
+        "symbol": sym,
+        "side": side,
+        "start_ts": start_ts,
+        "event_vwap": 100.0,
+        "total_notional": 100_000,
+    }
+
+
+class TestBands(unittest.TestCase):
+    def test_bollinger_uses_prior_bars_only(self):
+        base = _ms("2026-08-03T00:00:00+00:00")
+        candles = [_bar(base + i * 60000, c=100) for i in range(20)]
+        candles.append(_bar(base + 20 * 60000, c=500))
+
+        bands = bollinger_at(candles, 20, period=20)
+
+        self.assertIsNotNone(bands)
+        assert bands is not None
+        self.assertEqual(bands["mid"], 100)
+        self.assertEqual(bands["upper"], 100)
+        self.assertEqual(bands["lower"], 100)
+
+    def test_range_confirmation_for_upper_and_lower_band(self):
+        upper = {"upper": 105.0, "lower": 95.0, "mid": 100.0}
+        self.assertTrue(_range_confirmation("B", _bar(1, h=106, c=104), upper))
+        self.assertFalse(_range_confirmation("B", _bar(1, h=104, c=103), upper))
+        self.assertTrue(_range_confirmation("A", _bar(1, l=94, c=96), upper))
+        self.assertFalse(_range_confirmation("A", _bar(1, l=96, c=97), upper))
+
+
+class TestAltRangeLiqScalp(unittest.TestCase):
+    def test_short_fade_targets_mid_band(self):
+        base = _ms("2026-08-03T00:00:00+00:00")
+        closes = [98, 99, 100, 101, 102] * 4
+        candles = [
+            _bar(base + i * 60000, c=close, h=close + 0.5, l=close - 0.5)
+            for i, close in enumerate(closes)
+        ]
+        candles.append(_bar(base + 20 * 60000, o=102, h=106, l=100, c=102))
+        candles.append(_bar(base + 21 * 60000, o=102, h=102.5, l=99, c=100))
+        cascade = _cascade("2026-08-03T00:19:30+00:00", side="B")
+
+        trades = run_alt_range_liq_scalp(
+            [cascade],
+            {"SOL": candles},
+            band_period=20,
+            stop_buffer_bps=5,
+            round_trip_cost_bps=8,
+        )
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0].direction, "short")
+        self.assertEqual(trades[0].exit_reason, "mid_band_target")
+        self.assertAlmostEqual(trades[0].gross_return_pct, (102 - 100) / 102 * 100, places=4)
+        self.assertAlmostEqual(trades[0].net_return_pct, trades[0].gross_return_pct - 0.08, places=4)
+
+    def test_long_fade_stops_beyond_lower_band(self):
+        base = _ms("2026-08-03T00:00:00+00:00")
+        closes = [98, 99, 100, 101, 102] * 4
+        candles = [
+            _bar(base + i * 60000, c=close, h=close + 0.5, l=close - 0.5)
+            for i, close in enumerate(closes)
+        ]
+        candles.append(_bar(base + 20 * 60000, o=98, h=100, l=94, c=98))
+        candles.append(_bar(base + 21 * 60000, o=98, h=98, l=96, c=97))
+        cascade = _cascade("2026-08-03T00:19:30+00:00", side="A")
+
+        trades = run_alt_range_liq_scalp([cascade], {"SOL": candles}, band_period=20)
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0].direction, "long")
+        self.assertEqual(trades[0].exit_reason, "stop")
+
+    def test_refuses_btc_eth_by_default(self):
+        base = _ms("2026-08-03T00:00:00+00:00")
+        candles = [_bar(base + i * 60000, c=100, h=100.5, l=99.5) for i in range(22)]
+        cascade = _cascade("2026-08-03T00:19:30+00:00", sym="BTC", side="B")
+
+        trades = run_alt_range_liq_scalp([cascade], {"BTC": candles}, band_period=20)
+
+        self.assertEqual(trades, [])
+
+    def test_summarize_lane_trades(self):
+        base = _ms("2026-08-03T00:00:00+00:00")
+        closes = [98, 99, 100, 101, 102] * 4
+        candles = [
+            _bar(base + i * 60000, c=close, h=close + 0.5, l=close - 0.5)
+            for i, close in enumerate(closes)
+        ]
+        candles.extend([
+            _bar(base + 20 * 60000, h=106, l=100, c=102),
+            _bar(base + 21 * 60000, h=102.5, l=99, c=100),
+        ])
+        trades = run_alt_range_liq_scalp(
+            [_cascade("2026-08-03T00:19:30+00:00")],
+            {"SOL": candles},
+            band_period=20,
+        )
+
+        summary = summarize_lane_trades(trades)
+
+        self.assertIn("alt_range_liq_scalp|SOL", summary)
+        self.assertEqual(summary["alt_range_liq_scalp|SOL"]["n"], 1)
+
+
+class TestDiagnostics(unittest.TestCase):
+    def test_diagnostic_breakdown_groups_by_side_and_outlier_share(self):
+        trades = [
+            {"symbol": "HYPE", "side": "B", "direction": "short", "net_return_pct": 1.0, "band_width_pct": 0.4},
+            {"symbol": "HYPE", "side": "B", "direction": "short", "net_return_pct": 0.5, "band_width_pct": 0.7},
+            {"symbol": "HYPE", "side": "A", "direction": "long", "net_return_pct": -0.5, "band_width_pct": 1.2},
+        ]
+
+        out = diagnostic_breakdown(trades, return_field="net_return_pct", include_band_buckets=True)
+
+        self.assertEqual(out["all"]["n"], 3)
+        self.assertEqual(out["side=B"]["n"], 2)
+        self.assertEqual(out["symbol=HYPE|side=A"]["profit_factor"], 0.0)
+        self.assertAlmostEqual(out["all"]["largest_win_share_of_gross_profit"], 0.6667)
+        self.assertEqual(out["band_width=compressed"]["n"], 1)
+        self.assertEqual(out["band_width=normal"]["n"], 1)
+        self.assertEqual(out["band_width=wide"]["n"], 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

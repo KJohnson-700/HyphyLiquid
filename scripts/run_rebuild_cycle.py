@@ -101,6 +101,7 @@ def _print_trigger(info: dict, should_fire: bool) -> None:
     print(
         f"current_liquidation_count: {info['current_liquidation_count']}\n"
         f"new_rows_since_rebuild:    {info['new_rows']} (need >= {THRESHOLD_NEW_ROWS})\n"
+        f"mature_new_rows:           {info['mature_new_rows']} (need >= {THRESHOLD_NEW_ROWS})\n"
         + (
             f"last_liq_age_min:          {last_liq:.1f} (need >= {THRESHOLD_LAST_LIQ_AGE_MIN})\n"
             if last_liq is not None

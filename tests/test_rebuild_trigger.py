@@ -32,6 +32,7 @@ from src.strategy.rebuild_trigger import (
     load_baseline,
     parse_liquidation_ts,
     save_baseline,
+    count_mature_new_liquidations,
     update_baseline,
 )
 
@@ -178,6 +179,20 @@ class TestLiquidationFileHelpers:
         dt = datetime.fromtimestamp(ms / 1000.0, tz=UTC)
         assert dt.hour == 20
 
+    def test_count_mature_new_liquidations_skips_fresh_tail(self, tmp_path):
+        p = tmp_path / "liq.jsonl"
+        now = datetime(2026, 8, 3, 21, 0, tzinfo=UTC)
+        rows = [
+            {"ts": (now - timedelta(hours=2)).isoformat()},
+            {"ts": (now - timedelta(minutes=45)).isoformat()},
+            {"ts": (now - timedelta(minutes=31)).isoformat()},
+            {"ts": (now - timedelta(minutes=1)).isoformat()},
+        ]
+        p.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+        mature_before_ms = int((now - timedelta(minutes=30)).timestamp() * 1000)
+
+        assert count_mature_new_liquidations(p, 1, mature_before_ms) == 2
+
 
 # ----------------------------------------------------------------------------
 # load_baseline / save_baseline
@@ -269,23 +284,29 @@ class TestCheckShouldRebuild:
         assert info["new_rows"] == 5
         assert any("new_rows" in r for r in info["reasons"])
 
-    def test_hold_when_last_liq_too_recent(self, tmp_path):
+    def test_fire_when_latest_liq_recent_but_enough_new_rows_are_mature(self, tmp_path):
         from src.strategy import rebuild_trigger as rt
         liq = tmp_path / "liq.jsonl"
         base = tmp_path / "base.json"
-        last_dt = datetime(2026, 8, 2, 20, 50, tzinfo=UTC)  # 10 min ago
-        _write_liquidations(liq, 200, last_dt)
+        now = datetime(2026, 8, 2, 21, 0, tzinfo=UTC)
+        with liq.open("w", encoding="utf-8") as f:
+            for i in range(50):
+                f.write(json.dumps({"ts": (now - timedelta(hours=2, minutes=i)).isoformat()}) + "\n")
+            for i in range(150):
+                f.write(json.dumps({"ts": (now - timedelta(minutes=45, seconds=i)).isoformat()}) + "\n")
+            f.write(json.dumps({"ts": (now - timedelta(minutes=1)).isoformat()}) + "\n")
         rt.save_baseline({
             "liquidation_count": 50,
             "last_rebuild_ts": (datetime(2026, 8, 2, 18, 0, tzinfo=UTC)).isoformat(),
-            "last_liquidation_ts": last_dt.isoformat(),
         }, base)
-        now = datetime(2026, 8, 2, 21, 0, tzinfo=UTC)
         should_fire, info = rt.check_should_rebuild(
             now_utc=now, liquidations_path=liq, baseline_path=base,
         )
-        assert not should_fire
-        assert any("last_liq_age" in r for r in info["reasons"])
+        assert should_fire
+        assert info["new_rows"] == 151
+        assert info["mature_new_rows"] == 150
+        assert info["last_liq_age_min"] < THRESHOLD_LAST_LIQ_AGE_MIN
+        assert info["reasons"] == []
 
     def test_hold_when_rebuild_too_recent(self, tmp_path):
         from src.strategy import rebuild_trigger as rt

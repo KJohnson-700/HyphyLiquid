@@ -88,6 +88,19 @@ class TestClusterSplitBySymbol(unittest.TestCase):
         self.assertEqual(len(out), 2)
         self.assertEqual({c["symbol"] for c in out}, {"BTC", "ETH"})
 
+    def test_interleaved_symbols_do_not_break_same_symbol_cluster(self):
+        events = [
+            _ev("2026-08-02T10:00:00+00:00", "BTC", "A", notional=1_000_000),
+            _ev("2026-08-02T10:00:01+00:00", "ETH", "A", notional=1_000_000),
+            _ev("2026-08-02T10:00:02+00:00", "BTC", "A", notional=1_000_000),
+        ]
+        out = cluster_events(events, time_window_s=60)
+        btc = [c for c in out if c["symbol"] == "BTC"]
+        eth = [c for c in out if c["symbol"] == "ETH"]
+        self.assertEqual(len(btc), 1)
+        self.assertEqual(btc[0]["n_events"], 2)
+        self.assertEqual(len(eth), 1)
+
 
 class TestClusterWindowBoundary(unittest.TestCase):
     def test_default_60s_window(self):

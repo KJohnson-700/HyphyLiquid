@@ -223,16 +223,15 @@ def snapshot_event_features(event: dict, nearest: bool = True) -> dict:
 
     ctx_features = _asset_ctx_features(ctx_record)
 
-    # Compute event VWAP sanity-check vs event-reported price_avg
-    # (the monitor already gives us price_avg, this is just the same number
-    # in a different field name for the spec)
+    # Compute event VWAP sanity-check vs event-reported price_avg.
+    # total_notional / n_fills is average fill notional, not VWAP.
     event_vwap = event.get("price_avg")
     try:
         n = int(event.get("n_fills", 0)) or 0
         notional = float(event.get("total_notional", 0)) or 0.0
-        vwap_check = (notional / n) if n > 0 else None
+        avg_fill_notional = (notional / n) if n > 0 else None
     except (TypeError, ValueError):
-        vwap_check = None
+        avg_fill_notional = None
 
     return {
         # event identity
@@ -242,7 +241,8 @@ def snapshot_event_features(event: dict, nearest: bool = True) -> dict:
         "side": event.get("side"),
         # event primitives
         "event_vwap": event_vwap,
-        "vwap_check": vwap_check,
+        "vwap_check": event_vwap,
+        "avg_fill_notional": avg_fill_notional,
         "total_notional": event.get("total_notional"),
         "n_fills": event.get("n_fills"),
         "duration_ms": event.get("duration_ms"),
