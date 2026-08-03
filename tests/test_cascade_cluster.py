@@ -136,5 +136,118 @@ class TestClusterRealExampleFromData(unittest.TestCase):
         self.assertAlmostEqual(c["event_vwap"], 63001.0, places=4)
 
 
+class TestClusterVWAPMath(unittest.TestCase):
+    """The OLD (wrong) formula: event_vwap = sum(price_avg * notional) / sum(notional)
+    This is biased toward the higher-price sub-event.
+
+    The CORRECT formula: event_vwap = total_notional / total_size
+    where total_size = sum_i(notional_i / price_avg_i).
+    This is the size-weighted average across all fills, which is the
+    standard VWAP definition.
+    """
+
+    def test_vwap_equal_notional_equal_price(self):
+        # Sanity: equal notional, equal price -> VWAP = price
+        events = [
+            _ev("2026-08-02T10:00:00+00:00", "BTC", "B", notional=1_000_000, price_avg=100.0),
+            _ev("2026-08-02T10:00:01+00:00", "BTC", "B", notional=1_000_000, price_avg=100.0),
+        ]
+        out = cluster_events(events)
+        self.assertAlmostEqual(out[0]["event_vwap"], 100.0, places=4)
+
+    def test_vwap_unequal_notional_same_price(self):
+        # $2M at $100, $1M at $100 -> VWAP = $100 (size-weighted)
+        events = [
+            _ev("2026-08-02T10:00:00+00:00", "BTC", "B", notional=2_000_000, price_avg=100.0),
+            _ev("2026-08-02T10:00:01+00:00", "BTC", "B", notional=1_000_000, price_avg=100.0),
+        ]
+        out = cluster_events(events)
+        self.assertAlmostEqual(out[0]["event_vwap"], 100.0, places=4)
+
+    def test_vwap_unequal_notional_different_price(self):
+        """The key test. Sub-event A: 1M @ $100 = 10k units.
+        Sub-event B: 1M @ $50 = 20k units. Total = 30k units, $2M.
+        True VWAP = $2M / 30k = $66.67.
+        OLD (wrong) formula would give: (100*1M + 50*1M) / 2M = $75.
+        """
+        events = [
+            _ev("2026-08-02T10:00:00+00:00", "BTC", "B", notional=1_000_000, price_avg=100.0),
+            _ev("2026-08-02T10:00:01+00:00", "BTC", "B", notional=1_000_000, price_avg=50.0),
+        ]
+        out = cluster_events(events)
+        vwap = out[0]["event_vwap"]
+        # True VWAP = 66.67 (size-weighted)
+        self.assertAlmostEqual(vwap, 66.6667, places=2)
+        # The old (wrong) formula would have given 75.0 - if the test
+        # shows that, the fix didn't take.
+        self.assertNotAlmostEqual(vwap, 75.0, places=2)
+
+    def test_vwap_weighted_by_size_not_notional(self):
+        """Three sub-events with same price but different notional -> VWAP = price.
+        Three sub-events with different price and different notional -> true
+        size-weighted average.
+        """
+        # Each sub-event has $1M notional at different prices
+        events = [
+            _ev("2026-08-02T10:00:00+00:00", "BTC", "B", notional=1_000_000, price_avg=100.0),
+            _ev("2026-08-02T10:00:01+00:00", "BTC", "B", notional=2_000_000, price_avg=200.0),
+            _ev("2026-08-02T10:00:02+00:00", "BTC", "B", notional=1_000_000, price_avg=50.0),
+        ]
+        out = cluster_events(events)
+        # Total notional = 4M. Sizes: 10k + 10k + 20k = 40k. True VWAP = 4M/40k = 100.
+        # OLD (wrong) formula: (100*1M + 200*2M + 50*1M) / 4M = 550/4 = 137.5
+        self.assertAlmostEqual(out[0]["event_vwap"], 100.0, places=2)
+
+
+class TestClusterTimingValidation(unittest.TestCase):
+    """Verify cluster start_ts and end_ts are correct.
+
+    The detector's burst_window_ms is 2s, so the first event in a cluster
+    could be up to 2s AFTER the actual cascade started. The cluster's
+    start_ts is the first event's ts (the detector's first detection),
+    NOT the cascade's actual start. This is by design - we can only
+    timestamp what we observed.
+    """
+
+    def test_start_ts_is_first_event(self):
+        events = [
+            _ev("2026-08-02T10:00:00+00:00", "BTC", "B"),
+            _ev("2026-08-02T10:00:01+00:00", "BTC", "B"),
+            _ev("2026-08-02T10:00:30+00:00", "BTC", "B"),  # 30s gap, still in window
+        ]
+        out = cluster_events(events, time_window_s=60)
+        self.assertEqual(out[0]["start_ts"], "2026-08-02T10:00:00+00:00")
+        self.assertEqual(out[0]["end_ts"], "2026-08-02T10:00:30+00:00")
+
+    def test_end_ts_is_last_event(self):
+        events = [
+            _ev("2026-08-02T10:00:00+00:00", "BTC", "B"),
+            _ev("2026-08-02T10:00:05+00:00", "BTC", "B"),
+            _ev("2026-08-02T10:00:10+00:00", "BTC", "B"),
+        ]
+        out = cluster_events(events)
+        self.assertEqual(out[0]["start_ts"], "2026-08-02T10:00:00+00:00")
+        self.assertEqual(out[0]["end_ts"], "2026-08-02T10:00:10+00:00")
+
+    def test_duration_ms(self):
+        events = [
+            _ev("2026-08-02T10:00:00.000+00:00", "BTC", "B"),
+            _ev("2026-08-02T10:00:01.500+00:00", "BTC", "B"),
+        ]
+        out = cluster_events(events)
+        self.assertEqual(out[0]["duration_ms"], 1500)
+
+    def test_no_window_no_merge(self):
+        # Events 5s apart, window=2s -> stay separate
+        events = [
+            _ev("2026-08-02T10:00:00+00:00", "BTC", "B"),
+            _ev("2026-08-02T10:00:05+00:00", "BTC", "B"),
+        ]
+        out = cluster_events(events, time_window_s=2)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0]["end_ts"], "2026-08-02T10:00:00+00:00")
+        self.assertEqual(out[1]["start_ts"], "2026-08-02T10:00:05+00:00")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,13 @@ bulk_orders with grouping="normalTpsl".
 The atomic placement matters: if the entry fails, neither TP nor SL
 exist. If entry fills, both TP and SL are live in the same block.
 
+v1 TRADING ALLOWLIST
+--------------------
+v1 only trades BTC and ETH. Other symbols (SOL, HYPE, DOGE, BNB) are
+in the passive data collection / research phase per the spec split
+(see AGENTS.md). OrderManager.execute() will REFUSE to place orders
+for any non-v1 symbol — it's a hard guard, not a soft warning.
+
 Usage:
     from src.execution.order_manager import OrderManager
     mgr = OrderManager.from_env()
@@ -17,6 +24,11 @@ Usage:
     # result.error if not filled
 """
 from __future__ import annotations
+
+# v1 trading allowlist. OrderManager refuses to execute on anything
+# not in this set. Other symbols (SOL/HYPE/DOGE/BNB) are research-only.
+V1_TRADE_SYMBOLS: frozenset[str] = frozenset({"BTC", "ETH"})
+RESEARCH_SYMBOLS: frozenset[str] = frozenset({"SOL", "HYPE", "DOGE", "BNB"})
 
 import logging
 import os
@@ -146,7 +158,10 @@ class OrderManager:
         return notional / entry, notional
 
     def _round_to_tick(self, symbol: str, price: float) -> float:
-        ticks = {"BTC": 1.0, "ETH": 0.1, "SOL": 0.01, "HYPE": 0.001, "DOGE": 0.00001, "BNB": 0.01}
+        # v1 only: BTC and ETH. Other symbols (SOL/HYPE/DOGE/BNB) are
+        # research-only per the spec; OrderManager refuses to trade them
+        # (see _v1_allowlist below).
+        ticks = {"BTC": 1.0, "ETH": 0.1}
         tick = ticks.get(symbol, 0.01)
         return round(round(price / tick) * tick, 6)
 
@@ -167,7 +182,7 @@ class OrderManager:
         asset = self._asset_meta(symbol)
         if "szDecimals" in asset:
             return round(size, int(asset["szDecimals"]))
-        decimals = {"BTC": 5, "ETH": 4, "SOL": 2, "HYPE": 2, "DOGE": 0, "BNB": 3}
+        decimals = {"BTC": 5, "ETH": 4}
         d = decimals.get(symbol, 3)
         return round(size, d)
 
@@ -185,6 +200,21 @@ class OrderManager:
     def execute(self, signal: CascadeSignal, candles: pd.DataFrame,
                 current_price: Optional[float] = None) -> OrderResult:
         symbol = signal.symbol
+        # v1 allowlist guard. Refuse execution on any symbol that isn't
+        # in V1_TRADE_SYMBOLS. Other symbols are research-only; their
+        # data is collected but no orders are placed.
+        if symbol not in V1_TRADE_SYMBOLS:
+            return OrderResult(
+                signal_ts=signal.timestamp, symbol=symbol, side=(
+                    "long" if signal.direction == SignalDirection.LONG else "short"
+                ),
+                requested_size_usd=0.0, requested_leverage=0.0,
+                entry_px=0.0, tp_px=0.0, sl_px=0.0,
+                risk_verdict=RiskVerdict.REJECTED_RISK_PCT,
+                filled=False, status="rejected_v1_allowlist",
+                error=(f"{symbol} is not in v1 allowlist "
+                       f"({sorted(V1_TRADE_SYMBOLS)}); research-only"),
+            )
         if signal.direction == SignalDirection.NO_TRADE:
             return OrderResult(
                 signal_ts=signal.timestamp, symbol=symbol, side="no_trade",

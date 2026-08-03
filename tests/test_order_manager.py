@@ -1,14 +1,15 @@
 """Tests for the order manager sizing/validation logic.
 
 These tests DO NOT call the exchange (no real orders placed).
-They cover: ATR calc, size calc, tick rounding, risk rejection paths.
+They cover: ATR calc, size calc, tick rounding, risk rejection paths,
+and the v1 trading allowlist (refuses non-BTC/ETH orders).
 """
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-from src.execution.order_manager import OrderManager, OrderResult
+from src.execution.order_manager import OrderManager, OrderResult, V1_TRADE_SYMBOLS
 from src.risk import RiskVerdict
 from src.strategy.cascade import CascadeSignal, SignalDirection
 
@@ -213,3 +214,57 @@ def test_orphan_entry_attempts_cancel_when_child_order_fails() -> None:
     assert result.needs_reconciliation
     assert result.cancel_attempted
     assert fake.calls[-1] == ("cancel", [{"coin": "BTC", "oid": 100}])
+
+
+def test_v1_allowlist_includes_only_btc_eth() -> None:
+    # v1 trading is BTC/ETH only. Other symbols are research-only.
+    assert V1_TRADE_SYMBOLS == frozenset({"BTC", "ETH"})
+
+
+def test_refuses_to_trade_sol_research_symbol() -> None:
+    """SOL is research-only. OrderManager must refuse to place an order
+    for it, even with a valid LONG signal and full candle history."""
+    fake = _FakeExchange()
+    mgr = OrderManager(fake, _FakeInfo(), bankroll=1000.0)
+    sig = CascadeSignal(
+        symbol="SOL", timestamp=pd.Timestamp("2026-08-01T12:00:00Z"),
+        direction=SignalDirection.LONG, confidence=0.85,
+        reason="cascade detected", funding_rate=0.0001,
+    )
+    result = mgr.execute(sig, _candles(), current_price=73.0)
+    assert not result.filled
+    assert result.status == "rejected_v1_allowlist"
+    assert "SOL" in (result.error or "")
+    assert "research-only" in (result.error or "")
+    assert fake.calls == []  # exchange never called
+
+
+def test_refuses_to_trade_doge_research_symbol() -> None:
+    fake = _FakeExchange()
+    mgr = OrderManager(fake, _FakeInfo(), bankroll=1000.0)
+    sig = CascadeSignal(
+        symbol="DOGE", timestamp=pd.Timestamp("2026-08-01T12:00:00Z"),
+        direction=SignalDirection.SHORT, confidence=0.85,
+        reason="cascade detected", funding_rate=0.0001,
+    )
+    result = mgr.execute(sig, _candles(), current_price=0.07)
+    assert not result.filled
+    assert result.status == "rejected_v1_allowlist"
+    assert fake.calls == []
+
+
+def test_btc_and_eth_pass_allowlist() -> None:
+    """Sanity: the v1 symbols do NOT trigger the allowlist guard."""
+    fake = _FakeExchange()
+    mgr = OrderManager(fake, _FakeInfo(), bankroll=1000.0)
+    # We only need to confirm the allowlist doesn't reject. A real ATR
+    # rejection is fine; just confirm the status is NOT
+    # 'rejected_v1_allowlist'.
+    for sym in ("BTC", "ETH"):
+        sig = CascadeSignal(
+            symbol=sym, timestamp=pd.Timestamp("2026-08-01T12:00:00Z"),
+            direction=SignalDirection.SHORT, confidence=0.85,
+            reason="test", funding_rate=0.0,
+        )
+        result = mgr.execute(sig, _candles(n=5), current_price=60000.0 if sym == "BTC" else 3000.0)
+        assert result.status != "rejected_v1_allowlist", f"{sym} should pass allowlist"

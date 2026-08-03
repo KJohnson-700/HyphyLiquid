@@ -19,7 +19,14 @@ date: 2026-08-01
 
 ## TL;DR
 
-We are building an automated **liquidation-aware derivatives-flow counter-trade bot** on **Hyperliquid mainnet** with a **$1,000 USDC bankroll**. Single project, single venue. The strategy class is liquidation cascade counter-trade; execution is asset-routed into two tracks. Conservative risk rules. SOL and HYPE were added 2026-08-02 (HYPE is HL-native, SOL has 20x lev and the deepest liquidity after BTC/ETH).
+We are building an automated **liquidation-aware derivatives-flow counter-trade bot** on **Hyperliquid mainnet** with a **$1,000 USDC bankroll**. Single project, single venue. The strategy class is liquidation cascade counter-trade; execution is asset-routed into two tracks. Conservative risk rules. SOL and HYPE were added 2026-08-02 (HYPE is HL-native, SOL has 20x lev and the deepest liquidity after BTC/ETH). DOGE and BNB were added 2026-08-02 as **research-only** data sources.
+
+**Symbol split (hard guard):**
+
+- `v1_trade_symbols = BTC, ETH` — active execution, OrderManager trades these
+- `research_symbols = SOL, HYPE, DOGE, BNB` — passive data collection only, no orders
+
+The split is enforced at the `OrderManager.execute()` level (refuses non-v1 symbols with `rejected_v1_allowlist`) and surfaced in `scripts/status.py`. Backtests always report per-symbol, never blended across the two groups.
 
 **This is NOT a gold/silver project.** That was the original framing and recon (Week 0) proved it unviable — PAXG is the only metal perp on HL and it's too thin to support a $500+ strategy. We pivoted to crypto on 2026-08-01. See `vault/notes/2026-08-01-PIVOT-btc-eth-cascade.md` for the full pivot rationale (vault path: `C:\Users\AbuBa\Documents\Obsidian Vault\projects\gold-silver-hyperliquid\notes\`).
 
@@ -259,7 +266,8 @@ The vault is **Obsidian-flavored** with `[[wikilinks]]` and YAML frontmatter. Ma
 |---|---|
 | Project name | HyphyLiquid (name kept despite pivot — "hyphy" = energy, still fits) |
 | Bankroll | $1,000 USDC |
-| Strategy | Liquidation cascade counter-trade, asset-routed: BTC/ETH `fade_or_follow`, SOL/HYPE `range_sweep_scalp` |
+| v1 trade symbols | BTC, ETH (OrderManager refuses all others) |
+| Research symbols | SOL, HYPE, DOGE, BNB (data collection only) |
 | Venue | Hyperliquid mainnet |
 | Reference bot | WickHunter (31★) |
 | Risk/trade | 0.5-1% = $5-$10 |

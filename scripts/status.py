@@ -21,6 +21,11 @@ from pathlib import Path
 BACKTEST_GUARD_EVENTS = 100
 BACKTEST_GUARD_HOURS = 24
 
+# Symbol split per the spec (AGENTS.md §1 Strategy, two-track framing).
+# v1 = active build/execution. Research = passive data collection only.
+V1_TRADE_SYMBOLS = ("BTC", "ETH")
+RESEARCH_SYMBOLS = ("SOL", "HYPE", "DOGE", "BNB")
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 VAULT = Path(r"C:\Users\AbuBa\Documents\Obsidian Vault\projects\gold-silver-hyperliquid")
 LOG_DIR = PROJECT_ROOT / "logs"
@@ -307,9 +312,20 @@ def _parse_ts(ts: str) -> datetime:
     return dt
 
 
+def show_symbol_split() -> None:
+    _section("SYMBOL SPLIT (v1 vs research)")
+    print(f"  v1_trade_symbols   = {list(V1_TRADE_SYMBOLS)}  (active execution)")
+    print(f"  research_symbols    = {list(RESEARCH_SYMBOLS)}  (passive data only)")
+    print()
+    print("  v1 strategy is BTC/ETH-only. SOL/HYPE/DOGE/BNB are collected")
+    print("  for the alt track but no orders are placed on them.")
+    print("  OrderManager refuses to execute on non-v1 symbols.")
+
+
 def main() -> int:
     print(f"HyphyLiquid Status  -  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     show_session_now()
+    show_symbol_split()
     show_daemons()
     show_snapshots()
     show_paper_trades()

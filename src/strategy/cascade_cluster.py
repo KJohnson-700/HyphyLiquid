@@ -83,11 +83,11 @@ def cluster_events(events: list[dict], time_window_s: int = 60) -> list[dict]:
         same_direction = sym == current["symbol"] and side == current["side"]
         gap_s = (ev_dt - window_td).total_seconds()
         if same_direction and gap_s <= time_window_s:
-            # Extend cluster
+            # Extend cluster. VWAP math: track total size = sum_i(notional_i/price_i).
             current["end_ts"] = ts
             current["total_notional"] += notional
             current["n_fills"] += n_fills
-            current["weighted_price_sum"] += price_avg * notional
+            current["total_size"] += (notional / price_avg) if price_avg > 0 else 0.0
             current["max_confidence"] = max(current["max_confidence"], confidence)
             current["n_events"] += 1
             window_td = ev_dt
@@ -118,7 +118,13 @@ def _new_cluster(
         "end_ts": ts,
         "total_notional": notional,
         "n_fills": n_fills,
-        "weighted_price_sum": price_avg * notional,
+        # For VWAP math: cluster size (in coin) = sum_i(notional_i / price_i).
+        # We track the running sum; finalize divides total_notional by
+        # total_size to get the true VWAP. The old (wrong) formula
+        # weighted by notional which biased toward higher-price sub-
+        # events. See test_cascade_cluster.py::test_vwap_math for the
+        # worked example.
+        "total_size": (notional / price_avg) if price_avg > 0 else 0.0,
         "max_confidence": confidence,
         "n_events": 1,
     }
@@ -126,6 +132,15 @@ def _new_cluster(
 
 def _finalize(c: dict) -> dict:
     notional = c["total_notional"]
+    size = c.get("total_size", 0.0)
+    # True VWAP = sum(price * size) / sum(size) = total_notional / total_size.
+    # When the cluster has 1 event, this is the same as the event's
+    # price_avg (sanity check). When it has many, this is the right
+    # size-weighted average across all fills.
+    if size > 0:
+        event_vwap = notional / size
+    else:
+        event_vwap = 0.0
     out = {
         "symbol": c["symbol"],
         "side": c["side"],
@@ -133,7 +148,7 @@ def _finalize(c: dict) -> dict:
         "end_ts": c["end_ts"],
         "total_notional": notional,
         "n_fills": c["n_fills"],
-        "event_vwap": (c["weighted_price_sum"] / notional) if notional > 0 else 0.0,
+        "event_vwap": event_vwap,
         "max_confidence": c["max_confidence"],
         "n_events": c["n_events"],
     }
