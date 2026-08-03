@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-08-03 - TP/SL research note
+
+Codex added `docs/2026-08-03-RESEARCH-tp-sl-settings.md`.
+
+**Decision**
+- BTC/ETH `fade_or_follow` is not strategy-complete because it currently has no real TP/SL model, only a fixed 15-minute exit.
+- Alt `range_sweep_liq_scalp` already has a structural TP/SL: target mid-band, stop beyond outer band plus 5 bps.
+- Future backtests should report R-multiples, not only raw percent returns.
+- Initial BTC/ETH TP/SL grid should test fixed bps, event-VWAP invalidation, ATR stops, and TP ratios from 1.0R to 2.5R.
+
+---
+
 ## 2026-08-03 - Mature-row rebuild trigger fix
 
 Codex fixed the rebuild trigger so active liquidation streams do not starve the backtest cycle.
