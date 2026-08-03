@@ -12,9 +12,12 @@ from src.strategy.lane_backtest import (  # noqa: E402
     atr_at,
     bollinger_at,
     diagnostic_breakdown,
+    apply_trailing_exits,
     run_alt_range_liq_scalp,
     simulate_r_multiple_exit,
+    simulate_trailing_stop_exit,
     summarize_exit_analysis,
+    summarize_trailing_analysis,
     summarize_lane_trades,
 )
 
@@ -344,6 +347,90 @@ class TestRMultipleExits(unittest.TestCase):
         self.assertEqual(rescored[0].stop_model, "event_vwap")
         self.assertAlmostEqual(rescored[0].stop_bps, 100.0)
         self.assertEqual(rescored[0].exit_reason, "stop")
+
+    def test_trailing_stop_activates_then_exits(self):
+        base = _ms("2026-08-03T00:00:00+00:00")
+        candles = [
+            _bar(base, h=100.1, l=99.9, c=100),
+            _bar(base + 60000, h=101.2, l=100.2, c=101),
+            _bar(base + 120000, h=101.3, l=100.8, c=100.9),
+        ]
+
+        out = simulate_trailing_stop_exit(
+            candles,
+            entry_idx=0,
+            direction="long",
+            entry_price=100,
+            initial_stop_bps=50,
+            activation_r=1.0,
+            trail_bps=20,
+            max_hold_minutes=5,
+            round_trip_cost_bps=0,
+        )
+
+        self.assertIsNotNone(out)
+        assert out is not None
+        self.assertEqual(out["exit_reason"], "trailing_stop")
+        self.assertAlmostEqual(out["exit_price"], 101.2 * (1 - 0.002))
+        self.assertGreater(out["r_multiple"], 1.0)
+
+    def test_trailing_initial_stop_before_activation(self):
+        base = _ms("2026-08-03T00:00:00+00:00")
+        candles = [
+            _bar(base, h=100.1, l=99.9, c=100),
+            _bar(base + 60000, h=100.2, l=99.4, c=99.5),
+        ]
+
+        out = simulate_trailing_stop_exit(
+            candles,
+            entry_idx=0,
+            direction="long",
+            entry_price=100,
+            initial_stop_bps=50,
+            activation_r=1.0,
+            trail_bps=20,
+            max_hold_minutes=5,
+            round_trip_cost_bps=0,
+        )
+
+        self.assertIsNotNone(out)
+        assert out is not None
+        self.assertEqual(out["exit_reason"], "initial_stop")
+        self.assertAlmostEqual(out["gross_return_pct"], -0.5)
+
+    def test_apply_trailing_exits_summarizes_activation(self):
+        base = _ms("2026-08-03T00:00:00+00:00")
+        candles = [
+            _bar(base, h=100.1, l=99.9, c=100),
+            _bar(base + 60000, h=101.2, l=100.2, c=101),
+            _bar(base + 120000, h=101.3, l=100.8, c=100.9),
+        ]
+        trades = [{
+            "lane": "btc_eth_trailing_resolution",
+            "cascade_start_ts": "2026-08-02T23:59:30+00:00",
+            "symbol": "BTC",
+            "side": "A",
+            "variant": "baseline_fade",
+            "direction": "long",
+            "entry_ts": "2026-08-03T00:00:00+00:00",
+            "entry_price": 100,
+        }]
+
+        rescored = apply_trailing_exits(
+            trades,
+            {"BTC": candles},
+            initial_stop_bps=50,
+            activation_r=1.0,
+            trail_bps=20,
+            max_hold_minutes=5,
+            round_trip_cost_bps=0,
+        )
+        summary = summarize_trailing_analysis(rescored)
+
+        self.assertEqual(len(rescored), 1)
+        row = summary["btc_eth_trailing_resolution|baseline_fade|BTC"]
+        self.assertEqual(row["activation_rate"], 1.0)
+        self.assertEqual(row["trailing_stop_rate"], 1.0)
 
 
 class TestDiagnostics(unittest.TestCase):

@@ -89,6 +89,39 @@ class ExitAnalysisTrade:
         return asdict(self)
 
 
+@dataclass
+class TrailingExitTrade:
+    """One trade re-scored with initial stop plus trailing stop logic."""
+
+    lane: str
+    cascade_start_ts: str
+    symbol: str
+    side: str
+    variant: str
+    direction: str
+    entry_ts: str
+    entry_price: float
+    exit_ts: str
+    exit_price: float
+    gross_return_pct: float
+    net_return_pct: float
+    r_multiple: float
+    stop_model: str
+    initial_stop_bps: float
+    activation_r: float
+    trail_bps: float
+    initial_stop_price: float
+    activation_price: float
+    final_trailing_stop: float
+    mae_pct: float
+    mfe_pct: float
+    bars_held: int
+    exit_reason: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
 def _close(bar: dict) -> float | None:
     try:
         return float(bar.get("c") or bar.get("payload", {}).get("c"))
@@ -186,6 +219,38 @@ def _event_vwap_stop_price(
     return None
 
 
+def _effective_stop_bps(
+    trade: dict,
+    candles: list[dict],
+    *,
+    entry_idx: int,
+    direction: str,
+    entry_price: float,
+    stop_bps: float,
+    stop_model: str,
+    atr_period: int,
+    atr_mult: float,
+    vwap_buffer_bps: float,
+) -> float | None:
+    if stop_model == "fixed_bps":
+        return stop_bps if stop_bps > 0 else None
+    if stop_model == "atr":
+        atr = atr_at(candles, entry_idx, atr_period)
+        if atr is None or atr <= 0:
+            return None
+        return atr * atr_mult / entry_price * 10_000.0
+    if stop_model == "event_vwap":
+        stop_price = _event_vwap_stop_price(
+            trade,
+            direction=direction,
+            vwap_buffer_bps=vwap_buffer_bps,
+        )
+        if stop_price is None:
+            return None
+        return _stop_bps_from_price(direction, entry_price, stop_price)
+    return None
+
+
 def simulate_r_multiple_exit(
     candles: list[dict],
     *,
@@ -272,6 +337,114 @@ def simulate_r_multiple_exit(
     }
 
 
+def simulate_trailing_stop_exit(
+    candles: list[dict],
+    *,
+    entry_idx: int,
+    direction: str,
+    entry_price: float,
+    initial_stop_bps: float,
+    activation_r: float,
+    trail_bps: float,
+    max_hold_minutes: int,
+    round_trip_cost_bps: float = 8.0,
+) -> dict | None:
+    """Simulate an initial stop that switches to trailing after activation.
+
+    The initial stop defines 1R. The trailing stop activates only after price
+    moves `activation_r` times that initial risk in the trade's favor.
+    """
+    if (
+        entry_idx >= len(candles)
+        or entry_price <= 0
+        or initial_stop_bps <= 0
+        or activation_r <= 0
+        or trail_bps <= 0
+    ):
+        return None
+    stop_return_pct = initial_stop_bps / 100.0
+    trail_return_pct = trail_bps / 100.0
+    initial_stop = _price_at_return(entry_price, direction, -stop_return_pct)
+    activation = _price_at_return(entry_price, direction, stop_return_pct * activation_r)
+    last_idx = min(entry_idx + max_hold_minutes, len(candles) - 1)
+    if last_idx <= entry_idx:
+        return None
+
+    mae_pct = 0.0
+    mfe_pct = 0.0
+    active = False
+    best_price = entry_price
+    trailing_stop = initial_stop
+
+    for i in range(entry_idx + 1, last_idx + 1):
+        high = _high(candles[i])
+        low = _low(candles[i])
+        close = _close(candles[i])
+        if high is None or low is None or close is None:
+            continue
+        favorable, adverse = _excursions_pct(direction, entry_price, high, low)
+        mfe_pct = max(mfe_pct, favorable)
+        mae_pct = max(mae_pct, adverse)
+
+        if direction == "long":
+            if not active and low <= initial_stop:
+                exit_price = initial_stop
+                exit_reason = "initial_stop"
+                exit_idx = i
+                break
+            if high >= activation:
+                active = True
+            if active:
+                best_price = max(best_price, high)
+                trailing_stop = max(initial_stop, best_price * (1.0 - trail_return_pct / 100.0))
+                if low <= trailing_stop:
+                    exit_price = trailing_stop
+                    exit_reason = "trailing_stop"
+                    exit_idx = i
+                    break
+        else:
+            if not active and high >= initial_stop:
+                exit_price = initial_stop
+                exit_reason = "initial_stop"
+                exit_idx = i
+                break
+            if low <= activation:
+                active = True
+            if active:
+                best_price = min(best_price, low)
+                trailing_stop = min(initial_stop, best_price * (1.0 + trail_return_pct / 100.0))
+                if high >= trailing_stop:
+                    exit_price = trailing_stop
+                    exit_reason = "trailing_stop"
+                    exit_idx = i
+                    break
+    else:
+        close = _close(candles[last_idx])
+        if close is None:
+            return None
+        exit_price = close
+        exit_reason = "timeout_trailing_active" if active else "timeout_no_activation"
+        exit_idx = last_idx
+
+    gross = _return_pct(direction, entry_price, exit_price)
+    net = gross - (round_trip_cost_bps / 100.0)
+    return {
+        "exit_idx": exit_idx,
+        "exit_ts": _bar_ts(candles[exit_idx]),
+        "exit_price": exit_price,
+        "gross_return_pct": gross,
+        "net_return_pct": net,
+        "r_multiple": net / stop_return_pct if stop_return_pct > 0 else 0.0,
+        "initial_stop_price": initial_stop,
+        "activation_price": activation,
+        "final_trailing_stop": trailing_stop,
+        "mae_pct": mae_pct,
+        "mfe_pct": mfe_pct,
+        "bars_held": max(0, exit_idx - entry_idx),
+        "exit_reason": exit_reason,
+    }
+
+
 def apply_r_multiple_exits(
     trades: Iterable[dict],
     candles_by_symbol: dict[str, list[dict]],
@@ -301,26 +474,19 @@ def apply_r_multiple_exits(
         except (KeyError, TypeError, ValueError):
             continue
         direction = str(trade.get("direction", ""))
-        effective_stop_bps = stop_bps
-        model = stop_model
-        if stop_model == "atr":
-            atr = atr_at(candles, entry_idx, atr_period)
-            if atr is None or atr <= 0:
-                continue
-            effective_stop_bps = atr * atr_mult / entry_price * 10_000.0
-        elif stop_model == "event_vwap":
-            stop_price = _event_vwap_stop_price(
-                trade,
-                direction=direction,
-                vwap_buffer_bps=vwap_buffer_bps,
-            )
-            if stop_price is None:
-                continue
-            derived = _stop_bps_from_price(direction, entry_price, stop_price)
-            if derived is None:
-                continue
-            effective_stop_bps = derived
-        elif stop_model != "fixed_bps":
+        effective_stop_bps = _effective_stop_bps(
+            trade,
+            candles,
+            entry_idx=entry_idx,
+            direction=direction,
+            entry_price=entry_price,
+            stop_bps=stop_bps,
+            stop_model=stop_model,
+            atr_period=atr_period,
+            atr_mult=atr_mult,
+            vwap_buffer_bps=vwap_buffer_bps,
+        )
+        if effective_stop_bps is None:
             continue
         result = simulate_r_multiple_exit(
             candles,
@@ -349,7 +515,7 @@ def apply_r_multiple_exits(
                 gross_return_pct=round(result["gross_return_pct"], 4),
                 net_return_pct=round(result["net_return_pct"], 4),
                 r_multiple=round(result["r_multiple"], 4),
-                stop_model=model,
+                stop_model=stop_model,
                 stop_bps=round(effective_stop_bps, 4),
                 target_r=round(target_r, 4),
                 stop_price=round(result["stop_price"], 8),
@@ -359,6 +525,94 @@ def apply_r_multiple_exits(
                 bars_held=result["bars_held"],
                 exit_reason=result["exit_reason"],
                 source_exit_reason=str(trade.get("exit_reason", "fixed_horizon")),
+            )
+        )
+    return out
+
+
+def apply_trailing_exits(
+    trades: Iterable[dict],
+    candles_by_symbol: dict[str, list[dict]],
+    *,
+    initial_stop_bps: float,
+    activation_r: float,
+    trail_bps: float,
+    max_hold_minutes: int,
+    round_trip_cost_bps: float = 8.0,
+    stop_model: str = "fixed_bps",
+    atr_period: int = 14,
+    atr_mult: float = 1.0,
+    vwap_buffer_bps: float = 5.0,
+) -> list[TrailingExitTrade]:
+    """Re-score serialized lane trades with initial stop plus trailing exit."""
+    out: list[TrailingExitTrade] = []
+    for trade in trades:
+        sym = str(trade.get("symbol", "")).upper()
+        candles = candles_by_symbol.get(sym)
+        if not candles:
+            continue
+        entry_ts = str(trade.get("entry_ts", ""))
+        entry_idx = _find_bar_idx_by_ts(candles, entry_ts)
+        if entry_idx is None:
+            continue
+        try:
+            entry_price = float(trade["entry_price"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        direction = str(trade.get("direction", ""))
+        effective_stop_bps = _effective_stop_bps(
+            trade,
+            candles,
+            entry_idx=entry_idx,
+            direction=direction,
+            entry_price=entry_price,
+            stop_bps=initial_stop_bps,
+            stop_model=stop_model,
+            atr_period=atr_period,
+            atr_mult=atr_mult,
+            vwap_buffer_bps=vwap_buffer_bps,
+        )
+        if effective_stop_bps is None:
+            continue
+        result = simulate_trailing_stop_exit(
+            candles,
+            entry_idx=entry_idx,
+            direction=direction,
+            entry_price=entry_price,
+            initial_stop_bps=effective_stop_bps,
+            activation_r=activation_r,
+            trail_bps=trail_bps,
+            max_hold_minutes=max_hold_minutes,
+            round_trip_cost_bps=round_trip_cost_bps,
+        )
+        if result is None:
+            continue
+        out.append(
+            TrailingExitTrade(
+                lane=str(trade.get("lane", "")),
+                cascade_start_ts=str(trade.get("cascade_start_ts", "")),
+                symbol=sym,
+                side=str(trade.get("side", "")),
+                variant=str(trade.get("variant", trade.get("lane", ""))),
+                direction=direction,
+                entry_ts=entry_ts,
+                entry_price=round(entry_price, 8),
+                exit_ts=result["exit_ts"],
+                exit_price=round(result["exit_price"], 8),
+                gross_return_pct=round(result["gross_return_pct"], 4),
+                net_return_pct=round(result["net_return_pct"], 4),
+                r_multiple=round(result["r_multiple"], 4),
+                stop_model=stop_model,
+                initial_stop_bps=round(effective_stop_bps, 4),
+                activation_r=round(activation_r, 4),
+                trail_bps=round(trail_bps, 4),
+                initial_stop_price=round(result["initial_stop_price"], 8),
+                activation_price=round(result["activation_price"], 8),
+                final_trailing_stop=round(result["final_trailing_stop"], 8),
+                mae_pct=round(result["mae_pct"], 4),
+                mfe_pct=round(result["mfe_pct"], 4),
+                bars_held=result["bars_held"],
+                exit_reason=result["exit_reason"],
             )
         )
     return out
@@ -636,6 +890,47 @@ def summarize_exit_analysis(trades: Iterable[ExitAnalysisTrade]) -> dict:
             "profit_factor": round(pf, 3) if pf != float("inf") else "inf",
             "stop_rate": round(stop_hits / len(rows), 4) if rows else 0.0,
             "target_rate": round(target_hits / len(rows), 4) if rows else 0.0,
+            "timeout_rate": round(timeouts / len(rows), 4) if rows else 0.0,
+            "avg_mae_pct": round(mean(t.mae_pct for t in rows), 4) if rows else 0.0,
+            "avg_mfe_pct": round(mean(t.mfe_pct for t in rows), 4) if rows else 0.0,
+        }
+    return summary
+
+
+def summarize_trailing_analysis(trades: Iterable[TrailingExitTrade]) -> dict:
+    """Summarize trailing exit analysis by lane/variant/symbol."""
+    by_key: dict[tuple[str, str, str], list[TrailingExitTrade]] = {}
+    for trade in trades:
+        by_key.setdefault((trade.lane, trade.variant, trade.symbol), []).append(trade)
+
+    summary = {}
+    for (lane, variant, sym), rows in by_key.items():
+        returns = [t.net_return_pct for t in rows]
+        r_values = [t.r_multiple for t in rows]
+        wins = [r for r in returns if r > 0]
+        losses = [r for r in returns if r <= 0]
+        gross_profit = sum(wins)
+        gross_loss = -sum(losses) if losses else 0.0
+        pf = gross_profit / gross_loss if gross_loss > 0 else float("inf")
+        initial_stops = sum(1 for t in rows if t.exit_reason == "initial_stop")
+        trailing_stops = sum(1 for t in rows if t.exit_reason == "trailing_stop")
+        activated = sum(1 for t in rows if t.exit_reason in {"trailing_stop", "timeout_trailing_active"})
+        timeouts = sum(1 for t in rows if t.exit_reason.startswith("timeout"))
+        summary[f"{lane}|{variant}|{sym}"] = {
+            "lane": lane,
+            "variant": variant,
+            "symbol": sym,
+            "n": len(rows),
+            "win_rate": round(len(wins) / len(rows), 4) if rows else 0.0,
+            "avg_net_return_pct": round(mean(returns), 4) if returns else 0.0,
+            "median_net_return_pct": round(median(returns), 4) if returns else 0.0,
+            "avg_r": round(mean(r_values), 4) if r_values else 0.0,
+            "median_r": round(median(r_values), 4) if r_values else 0.0,
+            "avg_initial_stop_bps": round(mean(t.initial_stop_bps for t in rows), 4) if rows else 0.0,
+            "profit_factor": round(pf, 3) if pf != float("inf") else "inf",
+            "initial_stop_rate": round(initial_stops / len(rows), 4) if rows else 0.0,
+            "trailing_stop_rate": round(trailing_stops / len(rows), 4) if rows else 0.0,
+            "activation_rate": round(activated / len(rows), 4) if rows else 0.0,
             "timeout_rate": round(timeouts / len(rows), 4) if rows else 0.0,
             "avg_mae_pct": round(mean(t.mae_pct for t in rows), 4) if rows else 0.0,
             "avg_mfe_pct": round(mean(t.mfe_pct for t in rows), 4) if rows else 0.0,

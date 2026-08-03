@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-08-03 - BTC/ETH trailing resolution sweep
+
+Codex added a longer-horizon trailing-stop research lane for BTC/ETH.
+
+**What changed**
+- `src/strategy/lane_backtest.py` now supports initial-stop plus trailing-stop exit analysis.
+- `scripts/run_trailing_sweep.py` sweeps 30/60/120/240m hold windows, initial stop models, activation R, and trailing bps.
+- `tests/test_lane_backtest.py` covers trailing activation, initial-stop exit before activation, and trailing summary rates.
+- `docs/2026-08-03-HANDOFF-trailing-resolution.md` records commands and the current decision read.
+
+**Current read**
+- BTC B-side failed-reclaim continuation is the first watchlist-quality BTC pocket: 120/240m, event-VWAP stop with 15-25 bps buffer, activation near 2R, 10 bps trail, PF about 1.55-1.60.
+- Caveat: the positive pocket is only n=30 because 240m coverage excludes newer live-edge events.
+- ETH trailing remains weak; best checked rows stayed negative with PF below 0.70.
+- No execution promotion; next step is to see if the BTC B-side trailing pocket survives as more mature data arrives.
+
+---
+
 ## 2026-08-03 - Structure-aware TP/SL sweep
 
 Codex extended the TP/SL analysis beyond fixed-bps stops.
