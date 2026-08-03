@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-08-03 - External liquidation data source sweep
+
+Codex used MiniMax as a low-cost scout for external Hyperliquid data sources and logged the acceleration plan.
+
+**What changed**
+- Added `docs/2026-08-03-RESEARCH-external-liquidation-data-sources.md`.
+- Mirrored the research note into the Obsidian vault.
+- Added optional read-only external data API placeholders to `.env.example`.
+
+**Current read**
+- Moon Dev is the highest-priority data source because it can provide both 30d liquidation windows and BTC/HYPE near-liquidation position snapshots.
+- 0xArchive, Hyperliquid official S3/node data, Allium, Tardis, BlockLiquidity, and PurrData are secondary validation/backfill paths.
+- The goal is to validate BTC and HYPE with more data, not to promote either lane yet.
+
+---
+
 ## 2026-08-03 - BTC trailing stability report
 
 Codex added an analysis-only stability report for the BTC/ETH trailing candidate.
