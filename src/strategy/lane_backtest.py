@@ -16,6 +16,7 @@ from src.strategy.fade_or_follow_backtest import (
     _bar_dt,
     _bar_ts,
     _fade_direction,
+    _parse_ts,
     _return_pct,
     find_entry_idx,
 )
@@ -56,6 +57,37 @@ class LaneTrade:
         return asdict(self)
 
 
+@dataclass
+class ExitAnalysisTrade:
+    """One trade re-scored with explicit TP/SL rules."""
+
+    lane: str
+    cascade_start_ts: str
+    symbol: str
+    side: str
+    variant: str
+    direction: str
+    entry_ts: str
+    entry_price: float
+    exit_ts: str
+    exit_price: float
+    gross_return_pct: float
+    net_return_pct: float
+    r_multiple: float
+    stop_bps: float
+    target_r: float
+    stop_price: float
+    target_price: float
+    mae_pct: float
+    mfe_pct: float
+    bars_held: int
+    exit_reason: str
+    source_exit_reason: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
 def _close(bar: dict) -> float | None:
     try:
         return float(bar.get("c") or bar.get("payload", {}).get("c"))
@@ -75,6 +107,184 @@ def _low(bar: dict) -> float | None:
         return float(bar.get("l") or bar.get("payload", {}).get("l"))
     except (TypeError, ValueError):
         return None
+
+
+def _find_bar_idx_by_ts(candles: list[dict], ts: str) -> int | None:
+    target = _parse_ts(ts)
+    for i, bar in enumerate(candles):
+        bar_dt = _bar_dt(bar)
+        if bar_dt == target:
+            return i
+    return None
+
+
+def _price_at_return(entry: float, direction: str, return_pct: float) -> float:
+    if direction == "long":
+        return entry * (1.0 + return_pct / 100.0)
+    return entry * (1.0 - return_pct / 100.0)
+
+
+def _excursions_pct(direction: str, entry: float, high: float, low: float) -> tuple[float, float]:
+    """Return favorable/adverse candle excursions in raw price percent."""
+    if direction == "long":
+        favorable = (high - entry) / entry * 100.0
+        adverse = (entry - low) / entry * 100.0
+    else:
+        favorable = (entry - low) / entry * 100.0
+        adverse = (high - entry) / entry * 100.0
+    return max(0.0, favorable), max(0.0, adverse)
+
+
+def simulate_r_multiple_exit(
+    candles: list[dict],
+    *,
+    entry_idx: int,
+    direction: str,
+    entry_price: float,
+    stop_bps: float,
+    target_r: float,
+    max_hold_minutes: int,
+    round_trip_cost_bps: float = 8.0,
+) -> dict | None:
+    """Simulate TP/SL/timeout from a known entry using conservative ordering.
+
+    Stop distance is raw price bps, not ROE. If TP and SL are both touched in
+    the same candle, the stop wins to avoid optimistic intrabar assumptions.
+    """
+    if entry_idx >= len(candles) or entry_price <= 0 or stop_bps <= 0 or target_r <= 0:
+        return None
+    stop_return_pct = stop_bps / 100.0
+    target_return_pct = stop_return_pct * target_r
+    stop_price = _price_at_return(entry_price, direction, -stop_return_pct)
+    target_price = _price_at_return(entry_price, direction, target_return_pct)
+    last_idx = min(entry_idx + max_hold_minutes, len(candles) - 1)
+    if last_idx <= entry_idx:
+        return None
+
+    mae_pct = 0.0
+    mfe_pct = 0.0
+    for i in range(entry_idx + 1, last_idx + 1):
+        high = _high(candles[i])
+        low = _low(candles[i])
+        close = _close(candles[i])
+        if high is None or low is None or close is None:
+            continue
+        favorable, adverse = _excursions_pct(direction, entry_price, high, low)
+        mfe_pct = max(mfe_pct, favorable)
+        mae_pct = max(mae_pct, adverse)
+
+        if direction == "long":
+            if low <= stop_price:
+                exit_price = stop_price
+                exit_reason = "stop"
+                exit_idx = i
+                break
+            if high >= target_price:
+                exit_price = target_price
+                exit_reason = f"target_{target_r:g}r"
+                exit_idx = i
+                break
+        else:
+            if high >= stop_price:
+                exit_price = stop_price
+                exit_reason = "stop"
+                exit_idx = i
+                break
+            if low <= target_price:
+                exit_price = target_price
+                exit_reason = f"target_{target_r:g}r"
+                exit_idx = i
+                break
+    else:
+        close = _close(candles[last_idx])
+        if close is None:
+            return None
+        exit_price = close
+        exit_reason = "timeout"
+        exit_idx = last_idx
+
+    gross = _return_pct(direction, entry_price, exit_price)
+    net = gross - (round_trip_cost_bps / 100.0)
+    return {
+        "exit_idx": exit_idx,
+        "exit_ts": _bar_ts(candles[exit_idx]),
+        "exit_price": exit_price,
+        "gross_return_pct": gross,
+        "net_return_pct": net,
+        "r_multiple": net / stop_return_pct if stop_return_pct > 0 else 0.0,
+        "stop_price": stop_price,
+        "target_price": target_price,
+        "mae_pct": mae_pct,
+        "mfe_pct": mfe_pct,
+        "bars_held": max(0, exit_idx - entry_idx),
+        "exit_reason": exit_reason,
+    }
+
+
+def apply_r_multiple_exits(
+    trades: Iterable[dict],
+    candles_by_symbol: dict[str, list[dict]],
+    *,
+    stop_bps: float,
+    target_r: float,
+    max_hold_minutes: int,
+    round_trip_cost_bps: float = 8.0,
+) -> list[ExitAnalysisTrade]:
+    """Re-score serialized lane trades with explicit R-multiple TP/SL exits."""
+    out: list[ExitAnalysisTrade] = []
+    for trade in trades:
+        sym = str(trade.get("symbol", "")).upper()
+        candles = candles_by_symbol.get(sym)
+        if not candles:
+            continue
+        entry_ts = str(trade.get("entry_ts", ""))
+        entry_idx = _find_bar_idx_by_ts(candles, entry_ts)
+        if entry_idx is None:
+            continue
+        try:
+            entry_price = float(trade["entry_price"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        direction = str(trade.get("direction", ""))
+        result = simulate_r_multiple_exit(
+            candles,
+            entry_idx=entry_idx,
+            direction=direction,
+            entry_price=entry_price,
+            stop_bps=stop_bps,
+            target_r=target_r,
+            max_hold_minutes=max_hold_minutes,
+            round_trip_cost_bps=round_trip_cost_bps,
+        )
+        if result is None:
+            continue
+        out.append(
+            ExitAnalysisTrade(
+                lane=str(trade.get("lane", "")),
+                cascade_start_ts=str(trade.get("cascade_start_ts", "")),
+                symbol=sym,
+                side=str(trade.get("side", "")),
+                variant=str(trade.get("variant", trade.get("lane", ""))),
+                direction=direction,
+                entry_ts=entry_ts,
+                entry_price=round(entry_price, 8),
+                exit_ts=result["exit_ts"],
+                exit_price=round(result["exit_price"], 8),
+                gross_return_pct=round(result["gross_return_pct"], 4),
+                net_return_pct=round(result["net_return_pct"], 4),
+                r_multiple=round(result["r_multiple"], 4),
+                stop_bps=round(stop_bps, 4),
+                target_r=round(target_r, 4),
+                stop_price=round(result["stop_price"], 8),
+                target_price=round(result["target_price"], 8),
+                mae_pct=round(result["mae_pct"], 4),
+                mfe_pct=round(result["mfe_pct"], 4),
+                bars_held=result["bars_held"],
+                exit_reason=result["exit_reason"],
+                source_exit_reason=str(trade.get("exit_reason", "fixed_horizon")),
+            )
+        )
+    return out
 
 
 def bollinger_at(
@@ -315,6 +525,44 @@ def _summarize_returns(rows: list[dict], return_field: str) -> dict:
             round(largest_win / gross_profit, 4) if gross_profit > 0 else 0.0
         ),
     }
+
+
+def summarize_exit_analysis(trades: Iterable[ExitAnalysisTrade]) -> dict:
+    """Summarize TP/SL exit analysis by lane/variant/symbol."""
+    by_key: dict[tuple[str, str, str], list[ExitAnalysisTrade]] = {}
+    for trade in trades:
+        by_key.setdefault((trade.lane, trade.variant, trade.symbol), []).append(trade)
+
+    summary = {}
+    for (lane, variant, sym), rows in by_key.items():
+        returns = [t.net_return_pct for t in rows]
+        r_values = [t.r_multiple for t in rows]
+        wins = [r for r in returns if r > 0]
+        losses = [r for r in returns if r <= 0]
+        gross_profit = sum(wins)
+        gross_loss = -sum(losses) if losses else 0.0
+        pf = gross_profit / gross_loss if gross_loss > 0 else float("inf")
+        stop_hits = sum(1 for t in rows if t.exit_reason == "stop")
+        target_hits = sum(1 for t in rows if t.exit_reason.startswith("target_"))
+        timeouts = sum(1 for t in rows if t.exit_reason == "timeout")
+        summary[f"{lane}|{variant}|{sym}"] = {
+            "lane": lane,
+            "variant": variant,
+            "symbol": sym,
+            "n": len(rows),
+            "win_rate": round(len(wins) / len(rows), 4) if rows else 0.0,
+            "avg_net_return_pct": round(mean(returns), 4) if returns else 0.0,
+            "median_net_return_pct": round(median(returns), 4) if returns else 0.0,
+            "avg_r": round(mean(r_values), 4) if r_values else 0.0,
+            "median_r": round(median(r_values), 4) if r_values else 0.0,
+            "profit_factor": round(pf, 3) if pf != float("inf") else "inf",
+            "stop_rate": round(stop_hits / len(rows), 4) if rows else 0.0,
+            "target_rate": round(target_hits / len(rows), 4) if rows else 0.0,
+            "timeout_rate": round(timeouts / len(rows), 4) if rows else 0.0,
+            "avg_mae_pct": round(mean(t.mae_pct for t in rows), 4) if rows else 0.0,
+            "avg_mfe_pct": round(mean(t.mfe_pct for t in rows), 4) if rows else 0.0,
+        }
+    return summary
 
 
 def diagnostic_breakdown(

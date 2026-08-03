@@ -4,6 +4,25 @@
 
 ---
 
+## 2026-08-03 - TP/SL sweep infrastructure
+
+Codex added a data-driven exit-analysis layer for lane entries.
+
+**What changed**
+- `src/strategy/lane_backtest.py` now supports R-multiple TP/SL re-scoring with MAE/MFE, stop/target/timeout exit reasons, stop rate, target rate, and average R.
+- `scripts/run_lane_backtest.py` now accepts `--exit-model r_multiple`, `--stop-bps`, and `--target-r`.
+- `scripts/run_tp_sl_sweep.py` sweeps fixed raw-price stops against R-multiple targets for a lane/symbol/side.
+- `tests/test_lane_backtest.py` covers target hits, stop hits, timeout/cost behavior, and conservative same-bar stop-first ordering.
+- `docs/2026-08-03-HANDOFF-tp-sl-sweep.md` records commands, assumptions, and the current decision read.
+
+**Current read**
+- BTC B-side fails the first fixed-bps TP/SL grid: best PF about 0.40 after costs.
+- ETH fails the same grid: best PF about 0.41 after costs.
+- HYPE B-side remains watchlist-only: n=10, best tested fixed-bps combo about PF 1.44.
+- No execution promotion.
+
+---
+
 ## 2026-08-03 - TP/SL research note
 
 Codex added `docs/2026-08-03-RESEARCH-tp-sl-settings.md`.

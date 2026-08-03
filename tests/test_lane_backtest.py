@@ -8,9 +8,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.strategy.lane_backtest import (  # noqa: E402
     _range_confirmation,
+    apply_r_multiple_exits,
     bollinger_at,
     diagnostic_breakdown,
     run_alt_range_liq_scalp,
+    simulate_r_multiple_exit,
+    summarize_exit_analysis,
     summarize_lane_trades,
 )
 
@@ -128,6 +131,118 @@ class TestAltRangeLiqScalp(unittest.TestCase):
 
         self.assertIn("alt_range_liq_scalp|SOL", summary)
         self.assertEqual(summary["alt_range_liq_scalp|SOL"]["n"], 1)
+
+
+class TestRMultipleExits(unittest.TestCase):
+    def test_long_target_hit(self):
+        base = _ms("2026-08-03T00:00:00+00:00")
+        candles = [
+            _bar(base, h=100.1, l=99.9, c=100),
+            _bar(base + 60000, h=100.4, l=99.95, c=100.25),
+        ]
+
+        out = simulate_r_multiple_exit(
+            candles,
+            entry_idx=0,
+            direction="long",
+            entry_price=100,
+            stop_bps=10,
+            target_r=2.0,
+            max_hold_minutes=5,
+            round_trip_cost_bps=0,
+        )
+
+        self.assertIsNotNone(out)
+        assert out is not None
+        self.assertEqual(out["exit_reason"], "target_2r")
+        self.assertAlmostEqual(out["gross_return_pct"], 0.2)
+        self.assertAlmostEqual(out["r_multiple"], 2.0)
+
+    def test_same_bar_stop_beats_target(self):
+        base = _ms("2026-08-03T00:00:00+00:00")
+        candles = [
+            _bar(base, h=100.1, l=99.9, c=100),
+            _bar(base + 60000, h=100.3, l=99.8, c=100.1),
+        ]
+
+        out = simulate_r_multiple_exit(
+            candles,
+            entry_idx=0,
+            direction="long",
+            entry_price=100,
+            stop_bps=10,
+            target_r=2.0,
+            max_hold_minutes=5,
+            round_trip_cost_bps=0,
+        )
+
+        self.assertIsNotNone(out)
+        assert out is not None
+        self.assertEqual(out["exit_reason"], "stop")
+        self.assertAlmostEqual(out["gross_return_pct"], -0.1)
+        self.assertAlmostEqual(out["mae_pct"], 0.2)
+        self.assertAlmostEqual(out["mfe_pct"], 0.3)
+
+    def test_short_timeout_tracks_mae_mfe_and_costs(self):
+        base = _ms("2026-08-03T00:00:00+00:00")
+        candles = [
+            _bar(base, h=100.1, l=99.9, c=100),
+            _bar(base + 60000, h=100.05, l=99.95, c=99.98),
+            _bar(base + 120000, h=100.04, l=99.90, c=99.96),
+        ]
+
+        out = simulate_r_multiple_exit(
+            candles,
+            entry_idx=0,
+            direction="short",
+            entry_price=100,
+            stop_bps=20,
+            target_r=2.5,
+            max_hold_minutes=2,
+            round_trip_cost_bps=8,
+        )
+
+        self.assertIsNotNone(out)
+        assert out is not None
+        self.assertEqual(out["exit_reason"], "timeout")
+        self.assertAlmostEqual(out["gross_return_pct"], 0.04)
+        self.assertAlmostEqual(out["net_return_pct"], -0.04)
+        self.assertAlmostEqual(out["r_multiple"], -0.2)
+        self.assertAlmostEqual(out["mfe_pct"], 0.10)
+        self.assertAlmostEqual(out["mae_pct"], 0.05)
+
+    def test_apply_r_multiple_exits_rescores_serialized_trades(self):
+        base = _ms("2026-08-03T00:00:00+00:00")
+        candles = [
+            _bar(base, h=100.1, l=99.9, c=100),
+            _bar(base + 60000, h=100.4, l=99.95, c=100.25),
+        ]
+        trades = [{
+            "lane": "btc_eth_fade_or_follow",
+            "cascade_start_ts": "2026-08-02T23:59:30+00:00",
+            "symbol": "BTC",
+            "side": "A",
+            "variant": "baseline_fade",
+            "direction": "long",
+            "entry_ts": "2026-08-03T00:00:00+00:00",
+            "entry_price": 100,
+            "exit_reason": "fixed_horizon",
+        }]
+
+        rescored = apply_r_multiple_exits(
+            trades,
+            {"BTC": candles},
+            stop_bps=10,
+            target_r=2.0,
+            max_hold_minutes=5,
+            round_trip_cost_bps=0,
+        )
+        summary = summarize_exit_analysis(rescored)
+
+        self.assertEqual(len(rescored), 1)
+        self.assertEqual(rescored[0].exit_reason, "target_2r")
+        self.assertEqual(summary["btc_eth_fade_or_follow|baseline_fade|BTC"]["n"], 1)
+        self.assertEqual(summary["btc_eth_fade_or_follow|baseline_fade|BTC"]["target_rate"], 1.0)
 
 
 class TestDiagnostics(unittest.TestCase):

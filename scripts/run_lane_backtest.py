@@ -18,8 +18,10 @@ from scripts.run_fade_or_follow_backtest import _load_candles, _load_cascades  #
 from src.strategy.fade_or_follow_backtest import run_backtest, summarize  # noqa: E402
 from src.strategy.lane_backtest import (  # noqa: E402
     ALT_RESEARCH_SYMBOLS,
+    apply_r_multiple_exits,
     diagnostic_breakdown,
     run_alt_range_liq_scalp,
+    summarize_exit_analysis,
     summarize_lane_trades,
 )
 
@@ -78,6 +80,36 @@ def _print_diagnostics(breakdown: dict) -> None:
         )
 
 
+def _print_exit_summary(summary: dict, lane: str) -> None:
+    print()
+    print("=" * 78)
+    print(f"{lane} R-multiple exit results")
+    print("=" * 78)
+    if not summary:
+        print("  (no trades)")
+        return
+    print(
+        f"  {'lane/variant':<30} {'sym':<6} {'n':>4} {'WR%':>6} "
+        f"{'avg_net%':>9} {'med_net%':>9} {'avgR':>7} {'PF':>7} "
+        f"{'SL%':>6} {'TP%':>6} {'TO%':>6}"
+    )
+    print("  " + "-" * 92)
+    for row in sorted(summary.values(), key=lambda r: (r["variant"], r["symbol"])):
+        name = row.get("variant") or row.get("lane")
+        pf = row["profit_factor"]
+        pf_str = f"{pf:>6.2f}" if isinstance(pf, (int, float)) else f"{pf:>7}"
+        print(
+            f"  {name:<30} {row['symbol']:<6} {row['n']:>4} "
+            f"{row['win_rate'] * 100:>5.1f}% "
+            f"{row['avg_net_return_pct']:>+8.4f} "
+            f"{row['median_net_return_pct']:>+8.4f} "
+            f"{row['avg_r']:>+6.2f} {pf_str:>7} "
+            f"{row['stop_rate'] * 100:>5.1f}% "
+            f"{row['target_rate'] * 100:>5.1f}% "
+            f"{row['timeout_rate'] * 100:>5.1f}%"
+        )
+
+
 def _load_candle_map(symbols: set[str]) -> dict[str, list[dict]]:
     candles_by_symbol: dict[str, list[dict]] = {}
     for sym in sorted(symbols):
@@ -105,6 +137,16 @@ def main() -> int:
     parser.add_argument("--max-hold", type=int, default=15)
     parser.add_argument("--stop-buffer-bps", type=float, default=5.0)
     parser.add_argument("--round-trip-cost-bps", type=float, default=8.0)
+    parser.add_argument(
+        "--exit-model",
+        choices=("fixed_horizon", "r_multiple"),
+        default="fixed_horizon",
+        help="Keep fixed-horizon exits, or re-score entries with explicit stop/target",
+    )
+    parser.add_argument("--stop-bps", type=float, default=15.0,
+                        help="Raw price stop distance in bps for --exit-model r_multiple")
+    parser.add_argument("--target-r", type=float, default=2.5,
+                        help="Take-profit multiple of stop distance for --exit-model r_multiple")
     parser.add_argument("--diagnostics", action="store_true",
                         help="Print side/exit/regime breakdowns and outlier concentration")
     args = parser.parse_args()
@@ -159,18 +201,36 @@ def main() -> int:
         summary = summarize_lane_trades(lane_trades)
         return_field = "net_return_pct"
 
+    if args.exit_model == "r_multiple":
+        exit_trades = apply_r_multiple_exits(
+            serializable,
+            candles_by_symbol,
+            stop_bps=args.stop_bps,
+            target_r=args.target_r,
+            max_hold_minutes=args.max_hold if args.lane == "alt_range_liq_scalp" else args.horizon,
+            round_trip_cost_bps=args.round_trip_cost_bps,
+        )
+        serializable = [t.to_dict() for t in exit_trades]
+        summary = summarize_exit_analysis(exit_trades)
+        return_field = "net_return_pct"
+
     suffix = ""
     if args.symbol:
         suffix += f"_{args.symbol.lower()}"
     if args.side:
         suffix += f"_side_{args.side.lower()}"
+    if args.exit_model == "r_multiple":
+        suffix += f"_sl{args.stop_bps:g}bps_tp{args.target_r:g}r"
     out_path = OUT_DIR / f"lane_backtest_{args.lane}{suffix}_trades.jsonl"
     out_path.write_text(
         "\n".join(json.dumps(row) for row in serializable) + ("\n" if serializable else ""),
         encoding="utf-8",
     )
     print(f"\nWrote {len(serializable)} trades to {out_path.name}")
-    _print_summary(summary, args.lane)
+    if args.exit_model == "r_multiple":
+        _print_exit_summary(summary, args.lane)
+    else:
+        _print_summary(summary, args.lane)
     if args.diagnostics:
         _print_diagnostics(
             diagnostic_breakdown(
