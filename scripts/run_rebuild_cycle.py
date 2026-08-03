@@ -1,17 +1,20 @@
 """Run the cascade-rebuild + backtest cycle and update the baseline.
 
-Wraps the six scripts Slim specified:
+Wraps the nine scripts Slim specified:
   scripts/build_cascades.py              --time-window 60 --max-snapshot-lag 120
   scripts/run_fade_or_follow_backtest.py --horizon 15 --wait 3 --max-entry-lag 2
   scripts/run_lane_backtest.py           --lane btc_eth_fade_or_follow
   scripts/run_lane_backtest.py           --lane alt_range_liq_scalp
   scripts/run_lane_backtest.py           --lane btc_eth_fade_or_follow --symbol BTC --side B --diagnostics
   scripts/run_lane_backtest.py           --lane alt_range_liq_scalp         --symbol HYPE --side B --diagnostics
+  scripts/run_tp_sl_sweep.py             --lane btc_eth_fade_or_follow --symbol BTC --side B
+  scripts/run_tp_sl_sweep.py             --lane btc_eth_fade_or_follow --symbol ETH
+  scripts/run_tp_sl_sweep.py             --lane alt_range_liq_scalp         --symbol HYPE --side B
 
 The first two are the v1 main pipeline and must both succeed before the
-baseline is updated. The four subsequent runs (two lane sweeps + two
-focused side-filtered runs) are best-effort reporting; their failures
-are logged but do NOT block the baseline update.
+baseline is updated. The seven subsequent runs (two lane sweeps + two
+focused side-filtered + three TP/SL sweeps) are best-effort reporting;
+their failures are logged but do NOT block the baseline update.
 
 Post-cycle threshold checks (printed as ALERT lines, do not fail the run):
   - BTC B-side reclaim_fade: n >= 75 and PF > 1.5 -> FLAG
@@ -20,9 +23,9 @@ Post-cycle threshold checks (printed as ALERT lines, do not fail the run):
   - HYPE side=B (any variant) n >= 20 -> FLAG
 
 Behavior:
-  - default: check trigger; if HOLD, print status and exit 0; if FIRE, run all six
+  - default: check trigger; if HOLD, print status and exit 0; if FIRE, run all nine
   - --check: just print trigger state, no subprocess calls
-  - --force: run all six unconditionally (skips trigger check)
+  - --force: run all nine unconditionally (skips trigger check)
   - --dry-run: print the planned commands without executing
   - --skip-lanes: run only the main pipeline (v1 backtest only)
 
@@ -80,6 +83,24 @@ FOCUSED_HYPE_B_CMD = [
     "--symbol", "HYPE", "--side", "B",
     "--diagnostics",
 ]
+TP_SL_BTC_B_CMD = [
+    PYTHON,
+    "scripts/run_tp_sl_sweep.py",
+    "--lane", "btc_eth_fade_or_follow",
+    "--symbol", "BTC", "--side", "B",
+]
+TP_SL_ETH_CMD = [
+    PYTHON,
+    "scripts/run_tp_sl_sweep.py",
+    "--lane", "btc_eth_fade_or_follow",
+    "--symbol", "ETH",
+]
+TP_SL_HYPE_B_CMD = [
+    PYTHON,
+    "scripts/run_tp_sl_sweep.py",
+    "--lane", "alt_range_liq_scalp",
+    "--symbol", "HYPE", "--side", "B",
+]
 ALL_CMDS = [
     BUILD_CMD,
     BACKTEST_CMD,
@@ -87,6 +108,9 @@ ALL_CMDS = [
     LANE_ALT_CMD,
     FOCUSED_BTC_B_CMD,
     FOCUSED_HYPE_B_CMD,
+    TP_SL_BTC_B_CMD,
+    TP_SL_ETH_CMD,
+    TP_SL_HYPE_B_CMD,
 ]
 
 # Threshold alerts (per Slim's operating rules, 2026-08-03)
