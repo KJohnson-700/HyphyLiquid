@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-08-03 - BTC trailing stability report
+
+Codex added an analysis-only stability report for the BTC/ETH trailing candidate.
+
+**What changed**
+- `scripts/run_trailing_stability_report.py` compares the same trailing candidate across evaluation horizons and candle-coverage horizons.
+- The report prints overall rows plus chronological folds so a promising row can be checked for coverage bias and one-period dependence.
+- `tests/test_trailing_stability_report.py` covers the report summary math.
+
+**Decision use**
+- The current BTC B-side trailing pocket should not be promoted just because a 240m-mature subset looks good.
+- Marvis should use this report after each mature rebuild before escalating any BTC/ETH trailing result.
+
+---
+
 ## 2026-08-03 - BTC/ETH trailing resolution sweep
 
 Codex added a longer-horizon trailing-stop research lane for BTC/ETH.

@@ -36,6 +36,16 @@ ETH check:
 C:\Users\AbuBa\Desktop\HyphyLiquid\.tools\notebooklm-cli\Scripts\python.exe C:\Users\AbuBa\Desktop\HyphyLiquid\scripts\run_trailing_sweep.py --symbol ETH --horizons 30,60,120 --top 40
 ```
 
+Stability check for the current BTC watchlist candidate:
+
+```powershell
+C:\Users\AbuBa\Desktop\HyphyLiquid\.tools\notebooklm-cli\Scripts\python.exe C:\Users\AbuBa\Desktop\HyphyLiquid\scripts\run_trailing_stability_report.py
+```
+
+Use the stability report to compare `120m@120m` against `120m@240m`.
+If the result only works in the stricter 240m-mature subset, treat it as
+coverage bias until the broader 120m sample agrees.
+
 ## Current Read
 
 BTC B-side:
@@ -47,11 +57,21 @@ BTC B-side:
   activation around 2R, 10 bps trail, PF about 1.55-1.60.
 - The positive rows are n=30 because 240m coverage excludes newer events.
   Treat them as a watchlist hypothesis, not promotion evidence.
+- Stability report update:
+  - `120m@120m`: n=37, PF 1.01, median -0.0863%.
+  - `120m@240m`: n=30, PF 1.60, median +0.0750%.
+  - `240m@240m`: n=30, PF 1.59, median +0.1081%.
+  - Read: the broader 120m sample does not yet confirm the edge. The
+    candidate is still a coverage-sensitive watchlist lane, not a paper-trade
+    lane.
 
 ETH:
 
 - Longer trailing exits did not rescue ETH.
 - Best checked rows stayed negative, with PF below 0.70.
+- Stability spot check on the same failed-reclaim/event-VWAP/2R/10bps model:
+  ETH A-side PF 0.50 at 120m and 0.47 at 240m; ETH B-side PF 0.31 at 120m
+  and 0.27 at 240m. ETH remains rejected under this framing.
 
 ## Decision
 
@@ -62,3 +82,6 @@ ETH:
   exact 240m-coverage subset.
 - Marvis should run the focused candidate family after each mature rebuild and
   report whether the n=30 pocket survives as it grows.
+- Marvis should also run `scripts/run_trailing_stability_report.py` after the
+  focused sweep. Escalate only if the broad sample and mature subset both show
+  positive median and PF above 1.5 after costs.
