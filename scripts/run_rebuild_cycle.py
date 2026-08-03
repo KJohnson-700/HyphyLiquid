@@ -1,17 +1,27 @@
 """Run the cascade-rebuild + backtest cycle and update the baseline.
 
-Wraps the two scripts Slim specified:
+Wraps the four scripts Slim specified:
   scripts/build_cascades.py              --time-window 60 --max-snapshot-lag 120
   scripts/run_fade_or_follow_backtest.py --horizon 15 --wait 3 --max-entry-lag 2
+  scripts/run_lane_backtest.py           --lane btc_eth_fade_or_follow
+  scripts/run_lane_backtest.py           --lane alt_range_liq_scalp
+
+The first two are the v1 main pipeline and must both succeed before the
+baseline is updated. The two lane backtests are best-effort reporting
+runs that follow; their failures are logged but do NOT block the baseline
+update (they share cascades.jsonl with the main pipeline and the
+wrapper does not own the lane strategy logic).
 
 Behavior:
-  - default: check trigger; if HOLD, print status and exit 0; if FIRE, run both
+  - default: check trigger; if HOLD, print status and exit 0; if FIRE, run all four
   - --check: just print trigger state, no subprocess calls
-  - --force: run both unconditionally (skips trigger check)
+  - --force: run all four unconditionally (skips trigger check)
   - --dry-run: print the planned commands without executing
+  - --skip-lanes: run only the main pipeline (v1 backtest only)
 
-On both subprocesses succeeding, the baseline file (data/.rebuild_baseline.json)
-is updated via src.strategy.rebuild_trigger.update_baseline().
+On both main-pipeline scripts succeeding, the baseline file
+(data/.rebuild_baseline.json) is updated via
+src.strategy.rebuild_trigger.update_baseline().
 """
 
 from __future__ import annotations
@@ -45,6 +55,9 @@ BACKTEST_CMD = [
     "--max-entry-lag",
     "2",
 ]
+LANE_BTC_ETH_CMD = [PYTHON, "scripts/run_lane_backtest.py", "--lane", "btc_eth_fade_or_follow"]
+LANE_ALT_CMD = [PYTHON, "scripts/run_lane_backtest.py", "--lane", "alt_range_liq_scalp"]
+ALL_CMDS = [BUILD_CMD, BACKTEST_CMD, LANE_BTC_ETH_CMD, LANE_ALT_CMD]
 
 
 def _print_trigger(info: dict, should_fire: bool) -> None:
@@ -80,6 +93,11 @@ def main() -> int:
     mode.add_argument("--check", action="store_true", help="print trigger state and exit")
     mode.add_argument("--force", action="store_true", help="run cycle even if trigger is HOLD")
     mode.add_argument("--dry-run", action="store_true", help="print planned commands without running")
+    parser.add_argument(
+        "--skip-lanes",
+        action="store_true",
+        help="run only the main pipeline (build_cascades + run_fade_or_follow_backtest); skip lane backtests",
+    )
     args = parser.parse_args()
 
     if args.check:
@@ -88,20 +106,26 @@ def main() -> int:
         return 0 if should_fire else 1
 
     should_fire, info = check_should_rebuild()
+
+    planned_cmds = list(ALL_CMDS)
+    if args.skip_lanes:
+        planned_cmds = [BUILD_CMD, BACKTEST_CMD]
+
+    if args.dry_run:
+        print("DRY-RUN: planned commands:")
+        for cmd in planned_cmds:
+            print("  " + " ".join(cmd))
+        return 0
+
     if not (should_fire or args.force):
         print("TRIGGER HOLD. Skipping rebuild cycle.")
         _print_trigger(info, should_fire)
         return 0
 
-    if args.dry_run:
-        print("DRY-RUN: planned commands:")
-        print("  " + " ".join(BUILD_CMD))
-        print("  " + " ".join(BACKTEST_CMD))
-        return 0
-
     print("TRIGGER FIRE" if should_fire else "TRIGGER OVERRIDE (--force)")
     _print_trigger(info, should_fire)
 
+    # --- Main pipeline (must both succeed for baseline update) ---
     rc1 = _run(BUILD_CMD)
     if rc1 != 0:
         print(f"build_cascades exited {rc1}; aborting before backtest. Baseline NOT updated.")
@@ -112,9 +136,27 @@ def main() -> int:
         print(f"run_fade_or_follow_backtest exited {rc2}; baseline NOT updated.")
         return rc2
 
-    print("\n>>> Both scripts succeeded. Updating baseline.")
+    # --- Lane backtests (best-effort, do not block baseline) ---
+    lane_failures: list[tuple[str, int]] = []
+    if not args.skip_lanes:
+        for cmd in (LANE_BTC_ETH_CMD, LANE_ALT_CMD):
+            rc = _run(cmd)
+            if rc != 0:
+                lane_failures.append((" ".join(cmd[1:]), rc))
+                print(f"  WARNING: lane backtest exited {rc}; baseline will still update.")
+            else:
+                print(f"  lane backtest ok.")
+
+    print("\n>>> Main pipeline succeeded. Updating baseline.")
     payload = update_baseline()
     print(f"baseline: {payload}")
+
+    if lane_failures:
+        print(f"\n{len(lane_failures)} lane backtest(s) failed (baseline still updated):")
+        for cmd_str, rc in lane_failures:
+            print(f"  rc={rc}  {cmd_str}")
+        return 0  # Don't fail the wrapper on lane-only failures
+
     return 0
 
 
