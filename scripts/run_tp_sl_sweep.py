@@ -78,6 +78,16 @@ def main() -> int:
                         help="Comma-separated raw-price stop distances in bps")
     parser.add_argument("--targets-r", default="1,1.5,2,2.5",
                         help="Comma-separated take-profit multiples")
+    parser.add_argument(
+        "--stop-models",
+        default="fixed_bps,atr,event_vwap",
+        help="Comma-separated stop models: fixed_bps, atr, event_vwap",
+    )
+    parser.add_argument("--atr-period", type=int, default=14)
+    parser.add_argument("--atr-mults", default="0.5,0.75,1,1.5",
+                        help="Comma-separated ATR multiples for stop_model=atr")
+    parser.add_argument("--vwap-buffers-bps", default="0,5,10,15",
+                        help="Comma-separated VWAP buffers for stop_model=event_vwap")
     parser.add_argument("--horizon", type=int, default=15)
     parser.add_argument("--wait", type=int, default=3)
     parser.add_argument("--max-entry-lag", type=int, default=2)
@@ -114,22 +124,42 @@ def main() -> int:
 
     rows: list[dict] = []
     max_hold = args.max_hold if args.lane == "alt_range_liq_scalp" else args.horizon
-    for stop_bps in _parse_csv_floats(args.stops_bps):
+    stop_models = [m.strip() for m in args.stop_models.split(",") if m.strip()]
+    configs: list[dict] = []
+    for model in stop_models:
+        if model == "fixed_bps":
+            configs.extend({"stop_model": model, "stop_bps": v} for v in _parse_csv_floats(args.stops_bps))
+        elif model == "atr":
+            configs.extend({"stop_model": model, "atr_mult": v} for v in _parse_csv_floats(args.atr_mults))
+        elif model == "event_vwap":
+            configs.extend({"stop_model": model, "vwap_buffer_bps": v} for v in _parse_csv_floats(args.vwap_buffers_bps))
+        else:
+            raise ValueError(f"unsupported stop model: {model}")
+
+    for config in configs:
         for target_r in _parse_csv_floats(args.targets_r):
             rescored = apply_r_multiple_exits(
                 entries,
                 candles_by_symbol,
-                stop_bps=stop_bps,
+                stop_bps=float(config.get("stop_bps", 0.0)),
                 target_r=target_r,
                 max_hold_minutes=max_hold,
                 round_trip_cost_bps=args.round_trip_cost_bps,
+                stop_model=str(config["stop_model"]),
+                atr_period=args.atr_period,
+                atr_mult=float(config.get("atr_mult", 1.0)),
+                vwap_buffer_bps=float(config.get("vwap_buffer_bps", 5.0)),
             )
             for row in summarize_exit_analysis(rescored).values():
                 rows.append({
                     "lane": row["lane"],
                     "variant": row["variant"],
                     "symbol": row["symbol"],
-                    "stop_bps": stop_bps,
+                    "stop_model": config["stop_model"],
+                    "config_stop_bps": config.get("stop_bps"),
+                    "atr_mult": config.get("atr_mult"),
+                    "vwap_buffer_bps": config.get("vwap_buffer_bps"),
+                    "avg_effective_stop_bps": row["avg_stop_bps"],
                     "target_r": target_r,
                     **row,
                 })
@@ -147,16 +177,23 @@ def main() -> int:
     print("TP/SL sweep results")
     print("=" * 100)
     print(
-        f"  {'variant':<30} {'sym':<6} {'SL':>5} {'TPR':>5} {'n':>4} {'WR%':>6} "
-        f"{'avg%':>8} {'med%':>8} {'avgR':>7} {'PF':>7} {'SL%':>6} {'TP%':>6} {'TO%':>6}"
+        f"  {'variant':<30} {'sym':<6} {'model':<10} {'cfg':>7} {'TPR':>5} "
+        f"{'n':>4} {'WR%':>6} {'avg%':>8} {'med%':>8} {'avgR':>7} "
+        f"{'PF':>7} {'SL%':>6} {'TP%':>6} {'TO%':>6}"
     )
-    print("  " + "-" * 98)
-    for row in sorted(rows, key=lambda r: (-_pf_value(r["profit_factor"]), -r["n"], r["variant"], r["stop_bps"], r["target_r"])):
+    print("  " + "-" * 116)
+    for row in sorted(rows, key=lambda r: (-_pf_value(r["profit_factor"]), -r["n"], r["variant"], r["stop_model"], r["target_r"])):
         pf = row["profit_factor"]
         pf_str = f"{pf:>6.2f}" if isinstance(pf, (int, float)) else f"{pf:>7}"
+        if row["stop_model"] == "fixed_bps":
+            cfg = f"{row['config_stop_bps']:g}bps"
+        elif row["stop_model"] == "atr":
+            cfg = f"{row['atr_mult']:g}x"
+        else:
+            cfg = f"{row['vwap_buffer_bps']:g}bps"
         print(
-            f"  {row['variant']:<30} {row['symbol']:<6} {row['stop_bps']:>5.1f} "
-            f"{row['target_r']:>5.1f} {row['n']:>4} {row['win_rate'] * 100:>5.1f}% "
+            f"  {row['variant']:<30} {row['symbol']:<6} {row['stop_model']:<10} "
+            f"{cfg:>7} {row['target_r']:>5.1f} {row['n']:>4} {row['win_rate'] * 100:>5.1f}% "
             f"{row['avg_net_return_pct']:>+7.4f} {row['median_net_return_pct']:>+7.4f} "
             f"{row['avg_r']:>+6.2f} {pf_str:>7} {row['stop_rate'] * 100:>5.1f}% "
             f"{row['target_rate'] * 100:>5.1f}% {row['timeout_rate'] * 100:>5.1f}%"

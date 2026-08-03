@@ -90,7 +90,7 @@ def _print_exit_summary(summary: dict, lane: str) -> None:
         return
     print(
         f"  {'lane/variant':<30} {'sym':<6} {'n':>4} {'WR%':>6} "
-        f"{'avg_net%':>9} {'med_net%':>9} {'avgR':>7} {'PF':>7} "
+        f"{'avg_net%':>9} {'med_net%':>9} {'avgR':>7} {'avgSL':>7} {'PF':>7} "
         f"{'SL%':>6} {'TP%':>6} {'TO%':>6}"
     )
     print("  " + "-" * 92)
@@ -103,7 +103,7 @@ def _print_exit_summary(summary: dict, lane: str) -> None:
             f"{row['win_rate'] * 100:>5.1f}% "
             f"{row['avg_net_return_pct']:>+8.4f} "
             f"{row['median_net_return_pct']:>+8.4f} "
-            f"{row['avg_r']:>+6.2f} {pf_str:>7} "
+            f"{row['avg_r']:>+6.2f} {row['avg_stop_bps']:>6.1f} {pf_str:>7} "
             f"{row['stop_rate'] * 100:>5.1f}% "
             f"{row['target_rate'] * 100:>5.1f}% "
             f"{row['timeout_rate'] * 100:>5.1f}%"
@@ -147,6 +147,15 @@ def main() -> int:
                         help="Raw price stop distance in bps for --exit-model r_multiple")
     parser.add_argument("--target-r", type=float, default=2.5,
                         help="Take-profit multiple of stop distance for --exit-model r_multiple")
+    parser.add_argument(
+        "--stop-model",
+        choices=("fixed_bps", "atr", "event_vwap"),
+        default="fixed_bps",
+        help="Stop model for --exit-model r_multiple",
+    )
+    parser.add_argument("--atr-period", type=int, default=14)
+    parser.add_argument("--atr-mult", type=float, default=1.0)
+    parser.add_argument("--vwap-buffer-bps", type=float, default=5.0)
     parser.add_argument("--diagnostics", action="store_true",
                         help="Print side/exit/regime breakdowns and outlier concentration")
     args = parser.parse_args()
@@ -209,6 +218,10 @@ def main() -> int:
             target_r=args.target_r,
             max_hold_minutes=args.max_hold if args.lane == "alt_range_liq_scalp" else args.horizon,
             round_trip_cost_bps=args.round_trip_cost_bps,
+            stop_model=args.stop_model,
+            atr_period=args.atr_period,
+            atr_mult=args.atr_mult,
+            vwap_buffer_bps=args.vwap_buffer_bps,
         )
         serializable = [t.to_dict() for t in exit_trades]
         summary = summarize_exit_analysis(exit_trades)
@@ -220,7 +233,12 @@ def main() -> int:
     if args.side:
         suffix += f"_side_{args.side.lower()}"
     if args.exit_model == "r_multiple":
-        suffix += f"_sl{args.stop_bps:g}bps_tp{args.target_r:g}r"
+        if args.stop_model == "fixed_bps":
+            suffix += f"_sl{args.stop_bps:g}bps_tp{args.target_r:g}r"
+        elif args.stop_model == "atr":
+            suffix += f"_atr{args.atr_mult:g}x_tp{args.target_r:g}r"
+        else:
+            suffix += f"_vwap{args.vwap_buffer_bps:g}bps_tp{args.target_r:g}r"
     out_path = OUT_DIR / f"lane_backtest_{args.lane}{suffix}_trades.jsonl"
     out_path.write_text(
         "\n".join(json.dumps(row) for row in serializable) + ("\n" if serializable else ""),

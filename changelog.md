@@ -4,6 +4,25 @@
 
 ---
 
+## 2026-08-03 - Structure-aware TP/SL sweep
+
+Codex extended the TP/SL analysis beyond fixed-bps stops.
+
+**What changed**
+- `src/strategy/lane_backtest.py` now supports ATR stops and event-VWAP invalidation stops in the analysis layer.
+- ATR stops use prior completed 1m candles only.
+- Event-VWAP stops apply an adverse VWAP buffer and skip impossible stop placements.
+- `scripts/run_tp_sl_sweep.py` can sweep `fixed_bps`, `atr`, and `event_vwap` stop models together.
+- One-off `run_lane_backtest.py --exit-model r_multiple` reports average effective stop bps.
+
+**Current read**
+- BTC B-side still fails: best expanded-grid PF about 0.40, and structure-aware exits did not improve it.
+- ETH still fails: best expanded-grid PF about 0.41.
+- HYPE B-side remains watchlist-only: fixed 30 bps / 1.0R is still the best tiny-sample result around PF 1.44; ATR did not improve it.
+- The next research question is entry quality/filtering, not just exit settings.
+
+---
+
 ## 2026-08-03 - TP/SL sweep infrastructure
 
 Codex added a data-driven exit-analysis layer for lane entries.

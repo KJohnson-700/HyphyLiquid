@@ -74,6 +74,7 @@ class ExitAnalysisTrade:
     gross_return_pct: float
     net_return_pct: float
     r_multiple: float
+    stop_model: str
     stop_bps: float
     target_r: float
     stop_price: float
@@ -133,6 +134,56 @@ def _excursions_pct(direction: str, entry: float, high: float, low: float) -> tu
         favorable = (entry - low) / entry * 100.0
         adverse = (high - entry) / entry * 100.0
     return max(0.0, favorable), max(0.0, adverse)
+
+
+def atr_at(candles: list[dict], idx: int, period: int = 14) -> float | None:
+    """Return ATR using completed candles before idx."""
+    start = idx - period
+    if start < 1:
+        return None
+    ranges: list[float] = []
+    for i in range(start, idx):
+        high = _high(candles[i])
+        low = _low(candles[i])
+        prev_close = _close(candles[i - 1])
+        if high is None or low is None or prev_close is None:
+            return None
+        ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+    return mean(ranges) if ranges else None
+
+
+def _stop_bps_from_price(direction: str, entry_price: float, stop_price: float) -> float | None:
+    if entry_price <= 0 or stop_price <= 0:
+        return None
+    if direction == "long":
+        distance_pct = (entry_price - stop_price) / entry_price * 100.0
+    elif direction == "short":
+        distance_pct = (stop_price - entry_price) / entry_price * 100.0
+    else:
+        return None
+    if distance_pct <= 0:
+        return None
+    return distance_pct * 100.0
+
+
+def _event_vwap_stop_price(
+    trade: dict,
+    *,
+    direction: str,
+    vwap_buffer_bps: float,
+) -> float | None:
+    try:
+        vwap = float(trade.get("event_vwap", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if vwap <= 0:
+        return None
+    buffer = vwap_buffer_bps / 10_000.0
+    if direction == "long":
+        return vwap * (1.0 - buffer)
+    if direction == "short":
+        return vwap * (1.0 + buffer)
+    return None
 
 
 def simulate_r_multiple_exit(
@@ -229,6 +280,10 @@ def apply_r_multiple_exits(
     target_r: float,
     max_hold_minutes: int,
     round_trip_cost_bps: float = 8.0,
+    stop_model: str = "fixed_bps",
+    atr_period: int = 14,
+    atr_mult: float = 1.0,
+    vwap_buffer_bps: float = 5.0,
 ) -> list[ExitAnalysisTrade]:
     """Re-score serialized lane trades with explicit R-multiple TP/SL exits."""
     out: list[ExitAnalysisTrade] = []
@@ -246,12 +301,33 @@ def apply_r_multiple_exits(
         except (KeyError, TypeError, ValueError):
             continue
         direction = str(trade.get("direction", ""))
+        effective_stop_bps = stop_bps
+        model = stop_model
+        if stop_model == "atr":
+            atr = atr_at(candles, entry_idx, atr_period)
+            if atr is None or atr <= 0:
+                continue
+            effective_stop_bps = atr * atr_mult / entry_price * 10_000.0
+        elif stop_model == "event_vwap":
+            stop_price = _event_vwap_stop_price(
+                trade,
+                direction=direction,
+                vwap_buffer_bps=vwap_buffer_bps,
+            )
+            if stop_price is None:
+                continue
+            derived = _stop_bps_from_price(direction, entry_price, stop_price)
+            if derived is None:
+                continue
+            effective_stop_bps = derived
+        elif stop_model != "fixed_bps":
+            continue
         result = simulate_r_multiple_exit(
             candles,
             entry_idx=entry_idx,
             direction=direction,
             entry_price=entry_price,
-            stop_bps=stop_bps,
+            stop_bps=effective_stop_bps,
             target_r=target_r,
             max_hold_minutes=max_hold_minutes,
             round_trip_cost_bps=round_trip_cost_bps,
@@ -273,7 +349,8 @@ def apply_r_multiple_exits(
                 gross_return_pct=round(result["gross_return_pct"], 4),
                 net_return_pct=round(result["net_return_pct"], 4),
                 r_multiple=round(result["r_multiple"], 4),
-                stop_bps=round(stop_bps, 4),
+                stop_model=model,
+                stop_bps=round(effective_stop_bps, 4),
                 target_r=round(target_r, 4),
                 stop_price=round(result["stop_price"], 8),
                 target_price=round(result["target_price"], 8),
@@ -555,6 +632,7 @@ def summarize_exit_analysis(trades: Iterable[ExitAnalysisTrade]) -> dict:
             "median_net_return_pct": round(median(returns), 4) if returns else 0.0,
             "avg_r": round(mean(r_values), 4) if r_values else 0.0,
             "median_r": round(median(r_values), 4) if r_values else 0.0,
+            "avg_stop_bps": round(mean(t.stop_bps for t in rows), 4) if rows else 0.0,
             "profit_factor": round(pf, 3) if pf != float("inf") else "inf",
             "stop_rate": round(stop_hits / len(rows), 4) if rows else 0.0,
             "target_rate": round(target_hits / len(rows), 4) if rows else 0.0,

@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.strategy.lane_backtest import (  # noqa: E402
     _range_confirmation,
     apply_r_multiple_exits,
+    atr_at,
     bollinger_at,
     diagnostic_breakdown,
     run_alt_range_liq_scalp,
@@ -243,6 +244,106 @@ class TestRMultipleExits(unittest.TestCase):
         self.assertEqual(rescored[0].exit_reason, "target_2r")
         self.assertEqual(summary["btc_eth_fade_or_follow|baseline_fade|BTC"]["n"], 1)
         self.assertEqual(summary["btc_eth_fade_or_follow|baseline_fade|BTC"]["target_rate"], 1.0)
+
+    def test_atr_stop_uses_prior_completed_bars(self):
+        base = _ms("2026-08-03T00:00:00+00:00")
+        candles = [
+            _bar(base + i * 60000, h=101, l=99, c=100)
+            for i in range(15)
+        ]
+        candles.append(_bar(base + 15 * 60000, h=110, l=90, c=100))
+        trades = [{
+            "lane": "btc_eth_fade_or_follow",
+            "cascade_start_ts": "2026-08-02T23:59:30+00:00",
+            "symbol": "BTC",
+            "side": "A",
+            "variant": "baseline_fade",
+            "direction": "long",
+            "entry_ts": "2026-08-03T00:15:00+00:00",
+            "entry_price": 100,
+        }]
+
+        self.assertAlmostEqual(atr_at(candles, 15, period=14), 2.0)
+        rescored = apply_r_multiple_exits(
+            trades,
+            {"BTC": candles + [_bar(base + 16 * 60000, h=101, l=97, c=98)]},
+            stop_bps=0,
+            target_r=1.0,
+            max_hold_minutes=2,
+            round_trip_cost_bps=0,
+            stop_model="atr",
+            atr_period=14,
+            atr_mult=1.0,
+        )
+
+        self.assertEqual(len(rescored), 1)
+        self.assertEqual(rescored[0].stop_model, "atr")
+        self.assertAlmostEqual(rescored[0].stop_bps, 200.0)
+        self.assertEqual(rescored[0].exit_reason, "stop")
+
+    def test_event_vwap_stop_skips_wrong_side_stop(self):
+        base = _ms("2026-08-03T00:00:00+00:00")
+        candles = [
+            _bar(base, h=100.1, l=99.9, c=100),
+            _bar(base + 60000, h=100.2, l=99.8, c=100),
+        ]
+        trades = [{
+            "lane": "btc_eth_fade_or_follow",
+            "cascade_start_ts": "2026-08-02T23:59:30+00:00",
+            "symbol": "BTC",
+            "side": "A",
+            "variant": "baseline_fade",
+            "direction": "long",
+            "entry_ts": "2026-08-03T00:00:00+00:00",
+            "entry_price": 100,
+            "event_vwap": 101,
+        }]
+
+        rescored = apply_r_multiple_exits(
+            trades,
+            {"BTC": candles},
+            stop_bps=0,
+            target_r=1.0,
+            max_hold_minutes=1,
+            round_trip_cost_bps=0,
+            stop_model="event_vwap",
+        )
+
+        self.assertEqual(rescored, [])
+
+    def test_event_vwap_stop_derives_effective_stop_distance(self):
+        base = _ms("2026-08-03T00:00:00+00:00")
+        candles = [
+            _bar(base, h=100.1, l=99.9, c=100),
+            _bar(base + 60000, h=101, l=98.9, c=99),
+        ]
+        trades = [{
+            "lane": "btc_eth_fade_or_follow",
+            "cascade_start_ts": "2026-08-02T23:59:30+00:00",
+            "symbol": "BTC",
+            "side": "A",
+            "variant": "baseline_fade",
+            "direction": "long",
+            "entry_ts": "2026-08-03T00:00:00+00:00",
+            "entry_price": 100,
+            "event_vwap": 99,
+        }]
+
+        rescored = apply_r_multiple_exits(
+            trades,
+            {"BTC": candles},
+            stop_bps=0,
+            target_r=1.0,
+            max_hold_minutes=1,
+            round_trip_cost_bps=0,
+            stop_model="event_vwap",
+            vwap_buffer_bps=0,
+        )
+
+        self.assertEqual(len(rescored), 1)
+        self.assertEqual(rescored[0].stop_model, "event_vwap")
+        self.assertAlmostEqual(rescored[0].stop_bps, 100.0)
+        self.assertEqual(rescored[0].exit_reason, "stop")
 
 
 class TestDiagnostics(unittest.TestCase):
