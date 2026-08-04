@@ -28,7 +28,7 @@ from __future__ import annotations
 # v1 trading allowlist. OrderManager refuses to execute on anything
 # not in this set. Other symbols (SOL/HYPE/DOGE/BNB) are research-only.
 V1_TRADE_SYMBOLS: frozenset[str] = frozenset({"BTC", "ETH"})
-RESEARCH_SYMBOLS: frozenset[str] = frozenset({"SOL", "HYPE", "DOGE", "BNB", "XYZ:GOLD", "XYZ:SILVER"})
+RESEARCH_SYMBOLS: frozenset[str] = frozenset({"SOL", "HYPE", "DOGE", "BNB", "xyz:GOLD", "xyz:SILVER"})
 
 import logging
 import os

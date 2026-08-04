@@ -4,6 +4,7 @@ import pytest
 from src.strategy.liquidation_detector import (
     LiquidationDetector,
     TradeEvent,
+    thresholds_for,
 )
 
 
@@ -74,3 +75,21 @@ def test_high_confidence_decreasing_burst() -> None:
     detected = [e for e in events if e.confidence >= 0.85 and e.n_fills >= 3]
     assert len(detected) >= 1
     assert detected[-1].reason.startswith("decreasing-size burst")
+
+
+def test_per_symbol_thresholds_handle_bnb_and_hip3_canonicalization() -> None:
+    assert thresholds_for("BNB")["single_trade_min"] == 15_000.0
+    assert thresholds_for("BNB")["burst_total_min"] == 50_000.0
+    assert thresholds_for("XYZ:GOLD")["single_trade_min"] == 50_000.0
+    assert thresholds_for("xyz:SILVER")["burst_total_min"] == 75_000.0
+
+
+def test_out_of_order_replay_does_not_create_negative_duration() -> None:
+    d = LiquidationDetector(burst_total_min=50_000, single_trade_min=999_999)
+    events = []
+    events.extend(d.feed(_t("BNB", 2000, "A", 600, 20, tid=1)))
+    events.extend(d.feed(_t("BNB", 2100, "A", 600, 20, tid=2)))
+    events.extend(d.feed(_t("BNB", 2200, "A", 600, 20, tid=3)))
+    events.extend(d.feed(_t("BNB", 2300, "A", 600, 20, tid=4)))
+    events.extend(d.feed(_t("BNB", 1000, "A", 600, 20, tid=5)))
+    assert all(e.duration_ms >= 0 for e in events)

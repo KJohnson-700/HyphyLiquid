@@ -27,6 +27,7 @@ from src.strategy.cascade_cluster import cluster_events
 from src.strategy.event_features import (
     _bbo_from_l2book,
     _asset_ctx_features,
+    _file_stem,
     EVENT_FEATURES_PATH,
 )
 
@@ -126,20 +127,26 @@ def _extract_ts(rec: dict) -> int | None:
     return None
 
 
-def _build_indexes(symbols: Iterable[str]) -> tuple[dict, dict]:
-    """Build {symbol: SnapshotIndex} for l2book and asset_ctx per symbol.
+def _date_str_from_iso(ts: str) -> str | None:
+    try:
+        dt = datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.strftime("%Y-%m-%d")
 
-    Looks for today's file (2026-08-02). If you re-run on a later day,
-    update the date string.
-    """
-    date_str = "2026-08-02"
-    l2_idx: dict[str, SnapshotIndex] = {}
-    ctx_idx: dict[str, SnapshotIndex] = {}
-    for sym in symbols:
-        l2_path = PROJECT_ROOT / "data" / "ws_l2book" / f"{sym.lower()}_{date_str}.jsonl"
-        ctx_path = PROJECT_ROOT / "data" / "asset_ctx" / f"{sym.lower()}_{date_str}.jsonl"
-        l2_idx[sym] = SnapshotIndex(l2_path)
-        ctx_idx[sym] = SnapshotIndex(ctx_path)
+
+def _build_indexes(symbol_dates: Iterable[tuple[str, str]]) -> tuple[dict, dict]:
+    """Build {(symbol, date): SnapshotIndex} for l2book and asset_ctx."""
+    l2_idx: dict[tuple[str, str], SnapshotIndex] = {}
+    ctx_idx: dict[tuple[str, str], SnapshotIndex] = {}
+    for sym, date_str in sorted(set(symbol_dates)):
+        stem = _file_stem(sym)
+        l2_path = PROJECT_ROOT / "data" / "ws_l2book" / f"{stem}_{date_str}.jsonl"
+        ctx_path = PROJECT_ROOT / "data" / "asset_ctx" / f"{stem}_{date_str}.jsonl"
+        l2_idx[(sym, date_str)] = SnapshotIndex(l2_path)
+        ctx_idx[(sym, date_str)] = SnapshotIndex(ctx_path)
     return l2_idx, ctx_idx
 
 
@@ -158,7 +165,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--only-symbol",
-        choices=("BTC", "ETH", "SOL", "HYPE", "DOGE", "BNB"),
+        choices=("BTC", "ETH", "SOL", "HYPE", "DOGE", "BNB", "xyz:GOLD", "xyz:SILVER"),
         help="Only cluster events for this symbol.",
     )
     parser.add_argument(
@@ -197,13 +204,17 @@ def main() -> int:
         print(f"\nWrote {len(cascades)} cascades to {CASCADES_PATH.name} (no enrichment)")
     else:
         # Build per-file indexes ONCE, then bisect per cascade.
-        symbols = sorted({c["symbol"] for c in cascades if c.get("symbol")})
-        print(f"\nBuilding snapshot indexes for {len(symbols)} symbols...")
-        l2_idx, ctx_idx = _build_indexes(symbols)
-        for sym, idx in l2_idx.items():
-            print(f"  l2  {sym}: {len(idx.timestamps)} records")
-        for sym, idx in ctx_idx.items():
-            print(f"  ctx {sym}: {len(idx.timestamps)} records")
+        symbol_dates = {
+            (c["symbol"], date_str)
+            for c in cascades
+            if c.get("symbol") and (date_str := _date_str_from_iso(c.get("start_ts")))
+        }
+        print(f"\nBuilding snapshot indexes for {len(symbol_dates)} symbol-date files...")
+        l2_idx, ctx_idx = _build_indexes(symbol_dates)
+        for (sym, date_str), idx in l2_idx.items():
+            print(f"  l2  {sym} {date_str}: {len(idx.timestamps)} records")
+        for (sym, date_str), idx in ctx_idx.items():
+            print(f"  ctx {sym} {date_str}: {len(idx.timestamps)} records")
 
         written = 0
         skipped = 0
@@ -218,9 +229,10 @@ def main() -> int:
                 if ts_dt.tzinfo is None:
                     ts_dt = ts_dt.replace(tzinfo=timezone.utc)
                 ts_ms = int(ts_dt.timestamp() * 1000)
+                date_str = ts_dt.strftime("%Y-%m-%d")
 
-                l2_index = l2_idx.get(sym)
-                ctx_index = ctx_idx.get(sym)
+                l2_index = l2_idx.get((sym, date_str))
+                ctx_index = ctx_idx.get((sym, date_str))
                 l2_nearest = l2_index.nearest_with_delta(ts_ms) if l2_index else None
                 ctx_nearest = ctx_index.nearest_with_delta(ts_ms) if ctx_index else None
                 l2_rec = (

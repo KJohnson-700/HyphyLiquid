@@ -16,7 +16,7 @@ Paper candidates:
 
 Collect-only:
 
-- ETH, SOL, DOGE, BNB, `XYZ:GOLD`, `XYZ:SILVER`.
+- ETH, SOL, DOGE, BNB, `xyz:GOLD`, `xyz:SILVER`.
 
 Execution:
 

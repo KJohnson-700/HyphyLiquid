@@ -44,6 +44,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.run_fade_or_follow_backtest import _load_candles  # noqa: E402
+from src.strategy.event_features import _canonical_symbol  # noqa: E402
 from src.strategy.regime import (  # noqa: E402
     V1_TRADE_SYMBOLS,
     RESEARCH_SYMBOLS,
@@ -54,7 +55,7 @@ from src.strategy.regime import (  # noqa: E402
 )
 # 2026-08-03: HIP-3 (xyz:) probe symbols added to data collection.
 # Hard guardrail unchanged: v1_trade_symbols stays {BTC, ETH}.
-HIP3_PROBE_SYMBOLS = ("XYZ:GOLD", "XYZ:SILVER")
+HIP3_PROBE_SYMBOLS = ("xyz:GOLD", "xyz:SILVER")
 ALL_SYMBOLS = sorted(V1_TRADE_SYMBOLS | RESEARCH_SYMBOLS | set(HIP3_PROBE_SYMBOLS))
 
 CASCADES_PATH = REPO_ROOT / "data" / "cascades.jsonl"
@@ -154,7 +155,7 @@ def _find_candle_idx_for_event(candles: list[dict], event_ts_ms: int) -> int | N
 def _classify_cascade(cascade: dict, candles: list[dict]) -> dict:
     """Classify a single cascade into regime + response + route."""
     event_ms = _event_ts_ms(cascade)
-    sym = str(cascade.get("symbol", "")).upper()
+    sym = _canonical_symbol(str(cascade.get("symbol", "")))
     side = str(cascade.get("side", ""))
     event_vwap = cascade.get("event_vwap")
     if event_ms is None or side not in {"A", "B"} or not event_vwap:
@@ -201,7 +202,7 @@ def _step1_rebuild_metadata(cascades: list[dict], baseline: dict) -> dict:
     counts_by_side: dict[str, int] = {}
     counts_by_sym_side: dict[str, int] = {}
     for c in cascades:
-        sym = str(c.get("symbol", "")).upper()
+        sym = _canonical_symbol(str(c.get("symbol", "")))
         side = str(c.get("side", ""))
         counts_by_sym[sym] = counts_by_sym.get(sym, 0) + 1
         counts_by_side[side] = counts_by_side.get(side, 0) + 1
@@ -223,7 +224,7 @@ def _step2_regime_counts(classifications: list[dict], cascades: list[dict]) -> d
     """Per-symbol regime/response/route counts."""
     by_sym: dict[str, dict] = {}
     for c, klass in zip(cascades, classifications):
-        sym = str(c.get("symbol", "")).upper()
+        sym = _canonical_symbol(str(c.get("symbol", "")))
         side = str(c.get("side", ""))
         slot = by_sym.setdefault(
             sym,
@@ -429,7 +430,7 @@ def _step6_safety_gate(classifications: list[dict], cascades: list[dict]) -> dic
     """Verify SOL/HYPE/DOGE/BNB never route to execution_allowed=True."""
     violations: list[dict] = []
     for c, klass in zip(cascades, classifications):
-        sym = str(c.get("symbol", "")).upper()
+        sym = _canonical_symbol(str(c.get("symbol", "")))
         if sym in V1_TRADE_SYMBOLS:
             continue
         if klass.get("execution_allowed") is True:
@@ -480,7 +481,7 @@ def _build_log_line() -> dict:
 
     classifications: list[dict] = []
     for c in cascades:
-        sym = str(c.get("symbol", "")).upper()
+        sym = _canonical_symbol(str(c.get("symbol", "")))
         candles = candles_by_sym.get(sym, [])
         classifications.append(_classify_cascade(c, candles))
 

@@ -28,7 +28,7 @@ SYMBOLS = ("BTC", "ETH", "SOL", "HYPE", "DOGE", "BNB")
 # These need a separate metaAndAssetCtxs call with dex="xyz" since the
 # default endpoint only returns the native perp universe.
 HIP3_DEX = "xyz"
-HIP3_SYMBOLS = ("XYZ:GOLD", "XYZ:SILVER")
+HIP3_SYMBOLS = ("xyz:GOLD", "xyz:SILVER")
 # 1 min cadence — needed to compute OI delta inside the 1-5 min
 # `liquidation_fade_or_follow` wait window. 5 min was too coarse.
 INTERVAL_S = 60

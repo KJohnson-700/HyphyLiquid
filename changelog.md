@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-08-04 - Fix HIP-3 xyz symbol wiring
+
+Codex corrected the HIP-3 metal collector wiring so gold/silver can actually flow.
+
+**What changed**
+- Corrected metal symbols from `XYZ:GOLD`/`XYZ:SILVER` to Hyperliquid's live `xyz:GOLD`/`xyz:SILVER` names.
+- Added Windows-safe metal file handling (`xyz_gold_*`, `xyz_silver_*`) while preserving canonical in-memory symbols.
+- Updated liquidation monitor filename parsing so HIP-3 trade files produce correctly labeled liquidation events.
+- Fixed rebuild enrichment to index snapshot files by each cascade's real event date instead of the stale hardcoded 2026-08-02 date.
+- Lowered BNB research-only detector thresholds to `$15K` single / `$50K` burst after local trade distribution showed `$100K` / `$250K` was a dead detector.
+- Hardened the liquidation monitor against replay duplication and out-of-order burst duration artifacts; cleaned duplicated replay rows from `data/liquidations.jsonl`.
+
+---
+
 ## 2026-08-03 - Live-like BTC/HYPE paper lane
 
 Codex implemented the first live-like paper lane for the actual BTC/HYPE liquidation-regime strategies.
@@ -33,7 +47,7 @@ Codex added the paper-launch plan for the actual BTC/HYPE liquidation-regime lan
 - Start planning paper now; paper is the live-sequence calibration lab, not the final proof step.
 - BTC B-side failed-reclaim continuation with trailing-resolution exit is the v1 paper candidate.
 - HYPE B-side range/liquidation scalp is research-paper only.
-- ETH/SOL/DOGE/BNB/XYZ:GOLD/XYZ:SILVER remain collect-only.
+- ETH/SOL/DOGE/BNB/xyz:GOLD/xyz:SILVER remain collect-only.
 
 **What changed**
 - Added `docs/2026-08-03-PLAN-paper-launch-btc-hype.md`.

@@ -117,8 +117,19 @@ def _date_str(ts_ms: int) -> str:
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
+def _canonical_symbol(symbol: str) -> str:
+    if ":" not in symbol:
+        return symbol.upper()
+    dex, market = symbol.split(":", 1)
+    return f"{dex.lower()}:{market.upper()}"
+
+
+def _file_stem(symbol: str) -> str:
+    return _canonical_symbol(symbol).lower().replace(":", "_")
+
+
 def _symbol_date_path(root: Path, sym: str, ts_ms: int, ext: str = "jsonl") -> Path:
-    return root / f"{sym.lower()}_{_date_str(ts_ms)}.{ext}"
+    return root / f"{_file_stem(sym)}_{_date_str(ts_ms)}.{ext}"
 
 
 def _bbo_from_l2book(l2book_payload: dict | None) -> dict:
@@ -198,7 +209,7 @@ def snapshot_event_features(event: dict, nearest: bool = True) -> dict:
     historical backfill the cluster script passes nearest=True so
     each event gets a snapshot from its own time, not from "now."
     """
-    sym = event.get("symbol", "?").upper()
+    sym = _canonical_symbol(event.get("symbol", "?"))
     ts_str = event.get("ts", "")
     try:
         ts_dt = datetime.fromisoformat(ts_str)

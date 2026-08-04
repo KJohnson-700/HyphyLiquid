@@ -10,6 +10,7 @@ from src.strategy.liquidation_detector import (
     LiquidationDetector,
     TradeEvent,
 )
+from scripts.liquidation_monitor import _symbol_from_trade_path
 
 DATA_DIR = PROJECT_ROOT / "data" / "trades"
 
@@ -18,7 +19,7 @@ def main() -> int:
     detector = LiquidationDetector()
     total_trades = 0
     for path in sorted(DATA_DIR.glob("*.jsonl")):
-        sym = path.name.split("_")[0].upper()
+        sym = _symbol_from_trade_path(path)
         for line in path.read_text(encoding="utf-8").strip().splitlines():
             if not line:
                 continue

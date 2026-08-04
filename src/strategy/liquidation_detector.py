@@ -75,20 +75,30 @@ PER_SYMBOL_THRESHOLDS: dict[str, dict] = {
     "SOL":  {"single_trade_min": 100_000.0, "burst_total_min": 250_000.0},
     "HYPE": {"single_trade_min": 100_000.0, "burst_total_min": 250_000.0},
     "DOGE": {"single_trade_min": 50_000.0,  "burst_total_min": 150_000.0},
-    "BNB":  {"single_trade_min": 100_000.0, "burst_total_min": 250_000.0},
+    # BNB observed p99.9 fill is ~$10k in the 2026-08-03/04 sample.
+    # Keep this research-only but no longer dead: ~$15k single / $50k burst
+    # captures rare large fills without turning ordinary prints into events.
+    "BNB":  {"single_trade_min": 15_000.0, "burst_total_min": 50_000.0},
     # BTC: explicit so it shows up in the table
     "BTC":  {"single_trade_min": 500_000.0, "burst_total_min": 1_000_000.0},
     # HIP-3 (xyz:) probe — 2026-08-03, research-only. Conservative to
     # over-capture events in the first 24-72h while we learn the
     # typical trade sizes. Slim to tune after seeing live distributions.
-    "XYZ:GOLD":   {"single_trade_min": 50_000.0,  "burst_total_min": 150_000.0},
-    "XYZ:SILVER": {"single_trade_min": 25_000.0,  "burst_total_min": 75_000.0},
+    "xyz:GOLD":   {"single_trade_min": 50_000.0,  "burst_total_min": 150_000.0},
+    "xyz:SILVER": {"single_trade_min": 25_000.0,  "burst_total_min": 75_000.0},
 }
+
+
+def _canonical_symbol(symbol: str) -> str:
+    if ":" not in symbol:
+        return symbol.upper()
+    dex, market = symbol.split(":", 1)
+    return f"{dex.lower()}:{market.upper()}"
 
 
 def thresholds_for(symbol: str) -> dict:
     """Return the threshold dict for a symbol, falling back to defaults."""
-    return {**DEFAULT_THRESHOLDS, **PER_SYMBOL_THRESHOLDS.get(symbol, {})}
+    return {**DEFAULT_THRESHOLDS, **PER_SYMBOL_THRESHOLDS.get(_canonical_symbol(symbol), {})}
 
 
 class LiquidationDetector:
@@ -140,9 +150,12 @@ class LiquidationDetector:
         )
         recent = self._recent[sym]
 
-        # Drop trades older than the burst window (per-symbol)
+        # Drop trades older than the burst window (per-symbol). Also drop
+        # future timestamps if a replayed file delivers records out of order.
         cutoff = trade.timestamp_ms - burst_window_ms
-        self._recent[sym] = [t for t in recent if t.timestamp_ms >= cutoff]
+        self._recent[sym] = [
+            t for t in recent if cutoff <= t.timestamp_ms <= trade.timestamp_ms
+        ]
         self._recent[sym].append(trade)
         recent = self._recent[sym]
 
@@ -165,7 +178,7 @@ class LiquidationDetector:
 
         # Check 2: Burst - aggregate same-direction trades in window
         for side in ("A", "B"):
-            same_dir = [t for t in recent if t.side == side]
+            same_dir = sorted((t for t in recent if t.side == side), key=lambda t: t.timestamp_ms)
             if len(same_dir) < 2:
                 continue
             total = sum(t.notional for t in same_dir)
@@ -188,7 +201,7 @@ class LiquidationDetector:
                     total_notional=total,
                     n_fills=len(same_dir),
                     price_avg=avg_p,
-                    duration_ms=same_dir[-1].timestamp_ms - same_dir[0].timestamp_ms,
+                    duration_ms=max(0, same_dir[-1].timestamp_ms - same_dir[0].timestamp_ms),
                     confidence=0.90,
                     reason=(f"decreasing-size burst: {len(same_dir)} fills, "
                             f"${total:,.0f}, price range {price_range*100:.3f}%"),
@@ -207,7 +220,7 @@ class LiquidationDetector:
                     total_notional=total,
                     n_fills=len(same_dir),
                     price_avg=avg_p,
-                    duration_ms=same_dir[-1].timestamp_ms - same_dir[0].timestamp_ms,
+                    duration_ms=max(0, same_dir[-1].timestamp_ms - same_dir[0].timestamp_ms),
                     confidence=0.70,
                     reason=f"same-price burst: {len(same_dir)} fills, ${total:,.0f}",
                     fills=list(same_dir),

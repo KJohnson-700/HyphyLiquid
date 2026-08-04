@@ -36,10 +36,22 @@ import websocket  # from hyperliquid SDK's deps
 WS_URL = "wss://api.hyperliquid.xyz/ws"
 # v1 trade symbols (active execution): BTC, ETH
 # research symbols (data collection only): SOL, HYPE, DOGE, BNB
-# hip3 probe (2026-08-03): XYZ:GOLD, XYZ:SILVER — research-only, no execution
-SYMBOLS = ("BTC", "ETH", "SOL", "HYPE", "DOGE", "BNB", "XYZ:GOLD", "XYZ:SILVER")
+# hip3 probe (2026-08-03): xyz:GOLD, xyz:SILVER — research-only, no execution.
+# Hyperliquid HIP-3 names use a lowercase dex prefix and uppercase market.
+SYMBOLS = ("BTC", "ETH", "SOL", "HYPE", "DOGE", "BNB", "xyz:GOLD", "xyz:SILVER")
 RECONNECT_DELAY_S = 5
 DATA_ROOT = PROJECT_ROOT / "data"
+
+
+def _canonical_symbol(symbol: str) -> str:
+    if ":" not in symbol:
+        return symbol.upper()
+    dex, market = symbol.split(":", 1)
+    return f"{dex.lower()}:{market.upper()}"
+
+
+def _file_stem(symbol: str) -> str:
+    return _canonical_symbol(symbol).lower().replace(":", "_")
 
 
 def _channel_dir(channel: str) -> Path:
@@ -55,7 +67,7 @@ def _save_trade_legacy_format(symbol: str, t: dict) -> None:
     trades_dir.mkdir(parents=True, exist_ok=True)
     ts_ms = t.get("time") or int(datetime.now(timezone.utc).timestamp() * 1000)
     date_str = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
-    path = trades_dir / f"{symbol.lower()}_{date_str}.jsonl"
+    path = trades_dir / f"{_file_stem(symbol)}_{date_str}.jsonl"
     tid = t.get("tid")
     key = str(tid) if tid is not None else f"{t.get('hash', '')}_{ts_ms}"
     record = {
@@ -80,7 +92,7 @@ def _save(channel: str, symbol: str, payload: dict) -> None:
     d = _channel_dir(channel)
     ts_ms = payload.get("ts") or int(datetime.now(timezone.utc).timestamp() * 1000)
     date_str = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
-    path = d / f"{symbol.lower()}_{date_str}.jsonl"
+    path = d / f"{_file_stem(symbol)}_{date_str}.jsonl"
     record = {"recv_ts": datetime.now(timezone.utc).isoformat(), "payload": payload}
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
@@ -99,7 +111,7 @@ def _maybe_log(channel: str, symbol: str) -> None:
     # Count today's records for this key
     d = _channel_dir(channel)
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    path = d / f"{symbol.lower()}_{date_str}.jsonl"
+    path = d / f"{_file_stem(symbol)}_{date_str}.jsonl"
     if path.exists():
         lines = sum(1 for _ in path.open("r", encoding="utf-8"))
         print(f"  [{channel}] {symbol}: {lines} records today", flush=True)
@@ -156,7 +168,7 @@ def on_message(ws, message):
             for t in payload:
                 if not isinstance(t, dict):
                     continue
-                coin = t.get("coin", "").upper()
+                coin = _canonical_symbol(t.get("coin", ""))
                 if coin in SYMBOLS:
                     t["ts"] = t.get("time") or int(datetime.now(timezone.utc).timestamp() * 1000)
                     _save("trades", coin, t)
@@ -169,7 +181,7 @@ def on_message(ws, message):
             # silently drop every record. See 2026-08-02 hot-fix.
             c = payload if isinstance(payload, dict) else None
             if c is not None:
-                coin = (c.get("s") or c.get("coin") or c.get("sym") or "").upper()
+                coin = _canonical_symbol(c.get("s") or c.get("coin") or c.get("sym") or "")
                 if coin in SYMBOLS:
                     c["ts"] = c.get("t") or int(datetime.now(timezone.utc).timestamp() * 1000)
                     c["coin"] = coin
@@ -178,7 +190,7 @@ def on_message(ws, message):
         elif channel in ("activeAssetCtx", "bbo"):
             if not isinstance(payload, dict):
                 return
-            coin = payload.get("coin", "").upper()
+            coin = _canonical_symbol(payload.get("coin", ""))
             if coin in SYMBOLS:
                 payload["ts"] = int(datetime.now(timezone.utc).timestamp() * 1000)
                 _save(channel, coin, payload)
@@ -186,7 +198,7 @@ def on_message(ws, message):
         elif channel == "l2Book":
             if not isinstance(payload, dict):
                 return
-            coin = payload.get("coin", "").upper()
+            coin = _canonical_symbol(payload.get("coin", ""))
             if coin in SYMBOLS:
                 payload["ts"] = int(datetime.now(timezone.utc).timestamp() * 1000)
                 _save("l2book", coin, payload)

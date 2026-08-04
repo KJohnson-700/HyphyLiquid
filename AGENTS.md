@@ -24,7 +24,7 @@ We are building an automated **liquidation-aware derivatives-flow counter-trade 
 **Symbol split (hard guard):**
 
 - `v1_trade_symbols = BTC, ETH` — active execution, OrderManager trades these
-- `research_symbols = SOL, HYPE, DOGE, BNB` — passive data collection only, no orders
+- `research_symbols = SOL, HYPE, DOGE, BNB, xyz:GOLD, xyz:SILVER` — passive data collection only, no orders
 
 The split is enforced at the `OrderManager.execute()` level (refuses non-v1 symbols with `rejected_v1_allowlist`) and surfaced in `scripts/status.py`. Backtests always report per-symbol, never blended across the two groups.
 

@@ -29,6 +29,16 @@ LOG_PATH = PROJECT_ROOT / "data" / "liquidations.jsonl"
 POLL_INTERVAL_S = 5  # check for new trades every 5s
 
 
+def _symbol_from_trade_path(path: Path) -> str:
+    """Return canonical symbol from a trade jsonl filename."""
+    stem = path.stem
+    if stem.startswith("xyz_gold_"):
+        return "xyz:GOLD"
+    if stem.startswith("xyz_silver_"):
+        return "xyz:SILVER"
+    return stem.split("_")[0].upper()
+
+
 def _last_line_offset(path: Path) -> int:
     """Return the byte offset where we left off reading this file."""
     state = PROJECT_ROOT / "data" / ".liquidation_monitor_state.json"
@@ -80,8 +90,8 @@ def _scan_once(
     """
     total_new_trades = 0
     total_events = 0
-    for path in trade_dir.glob("*.jsonl"):
-        sym = path.name.split("_")[0].upper()
+    for path in sorted(trade_dir.glob("*.jsonl")):
+        sym = _symbol_from_trade_path(path)
         offset = _last_line_offset(path)
         last_good_offset = offset
         with path.open("r", encoding="utf-8") as f:

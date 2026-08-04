@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.strategy.event_features import (
     _bbo_from_l2book,
     _asset_ctx_features,
+    _symbol_date_path,
     snapshot_event_features,
     write_event_features,
     EVENT_FEATURES_PATH,
@@ -80,6 +81,14 @@ class TestAssetCtxFeatures(unittest.TestCase):
 
 
 class TestSnapshotEventFeatures(unittest.TestCase):
+    def test_symbol_date_path_handles_hip3_symbols(self):
+        path = _symbol_date_path(
+            Path("root"),
+            "xyz:GOLD",
+            int(datetime(2026, 8, 4, tzinfo=timezone.utc).timestamp() * 1000),
+        )
+        self.assertEqual(path, Path("root") / "xyz_gold_2026-08-04.jsonl")
+
     def test_event_with_no_l2_or_ctx(self):
         # No l2book / asset_ctx files present -> null features, but event
         # primitives should still come through. Use a far-future date so

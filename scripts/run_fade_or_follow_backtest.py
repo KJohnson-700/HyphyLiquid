@@ -36,6 +36,7 @@ from src.strategy.fade_or_follow_backtest import (
     run_backtest,
     summarize,
 )
+from src.strategy.event_features import _canonical_symbol, _file_stem
 
 CASCADES_PATH = PROJECT_ROOT / "data" / "cascades.jsonl"
 TRADES_PATH = PROJECT_ROOT / "data" / "backtest_trades.jsonl"
@@ -65,7 +66,8 @@ def _load_candles(symbol: str, candle_dir: Path | None = None) -> list[dict]:
     candle open timestamp.
     """
     source_dir = candle_dir or PROJECT_ROOT / "data" / "ws_candle"
-    paths = sorted(source_dir.glob(f"{symbol.lower()}_*.jsonl"))
+    canonical = _canonical_symbol(symbol)
+    paths = sorted(source_dir.glob(f"{_file_stem(canonical)}_*.jsonl"))
     if not paths:
         return []
     by_open: dict[int, dict] = {}
@@ -81,7 +83,7 @@ def _load_candles(symbol: str, candle_dir: Path | None = None) -> list[dict]:
             payload = rec.get("payload") if isinstance(rec, dict) else None
             if not isinstance(payload, dict):
                 continue
-            if payload.get("s", "").upper() != symbol.upper():
+            if _canonical_symbol(payload.get("s", "")) != canonical:
                 continue
             t = payload.get("t")
             c = payload.get("c")

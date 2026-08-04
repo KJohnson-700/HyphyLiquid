@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.liquidation_monitor import _scan_once
+from scripts.liquidation_monitor import _scan_once, _symbol_from_trade_path
 from src.strategy.liquidation_detector import LiquidationDetector
 
 
@@ -124,3 +124,9 @@ def test_scan_once_holds_offset_for_partial_line(tmp_path, state_file) -> None:
     new_trades_3, new_events_3 = _scan_once(detector, set(), trade_dir, log_path)
     assert new_trades_3 == 1
     assert new_events_3 == 1
+
+
+def test_symbol_from_trade_path_handles_hip3_safe_filenames() -> None:
+    assert _symbol_from_trade_path(Path("xyz_gold_2026-08-04.jsonl")) == "xyz:GOLD"
+    assert _symbol_from_trade_path(Path("xyz_silver_2026-08-04.jsonl")) == "xyz:SILVER"
+    assert _symbol_from_trade_path(Path("btc_2026-08-04.jsonl")) == "BTC"
