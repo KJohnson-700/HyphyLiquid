@@ -1,6 +1,6 @@
 """Run the cascade-rebuild + backtest cycle and update the baseline.
 
-Wraps the ten scripts Slim specified:
+Wraps the eleven scripts Slim specified:
   scripts/build_cascades.py              --time-window 60 --max-snapshot-lag 120
   scripts/run_fade_or_follow_backtest.py --horizon 15 --wait 3 --max-entry-lag 2
   scripts/run_lane_backtest.py           --lane btc_eth_fade_or_follow
@@ -14,12 +14,14 @@ Wraps the ten scripts Slim specified:
                                           --horizons 120,240 --stop-models event_vwap,fixed_bps \
                                           --initial-stops-bps 30,50 --vwap-buffers-bps 15,25 \
                                           --activation-rs 1,1.5,2 --trail-bps 10,15,25 --top 25
+  scripts/run_regime_summary.py          (post-pipeline evidence collector per
+                                          docs/2026-08-03-HANDOFF-regime-map.md)
 
 The first two are the v1 main pipeline and must both succeed before the
-baseline is updated. The eight subsequent runs (two lane sweeps + two
-focused side-filtered + three TP/SL sweeps + one trailing sweep) are
-best-effort reporting; their failures are logged but do NOT block the
-baseline update.
+baseline is updated. The nine subsequent runs (two lane sweeps + two
+focused side-filtered + three TP/SL sweeps + one trailing sweep + one
+regime summary) are best-effort reporting; their failures are logged but
+do NOT block the baseline update.
 
 Post-cycle threshold checks (printed as FLAG lines, do not fail the run):
   - BTC B-side reclaim_fade: n >= 75 and PF > 1.5 -> FLAG
@@ -121,6 +123,7 @@ TRAILING_BTC_B_CMD = [
     "--trail-bps", "10,15,25",
     "--top", "25",
 ]
+REGIME_SUMMARY_CMD = [PYTHON, "scripts/run_regime_summary.py"]
 ALL_CMDS = [
     BUILD_CMD,
     BACKTEST_CMD,
@@ -132,6 +135,7 @@ ALL_CMDS = [
     TP_SL_ETH_CMD,
     TP_SL_HYPE_B_CMD,
     TRAILING_BTC_B_CMD,
+    REGIME_SUMMARY_CMD,
 ]
 
 # Threshold alerts (per Slim's operating rules, 2026-08-03)
@@ -456,6 +460,14 @@ def main() -> int:
         if rc_tb != 0:
             lane_failures.append((" ".join(TRAILING_BTC_B_CMD[1:]), rc_tb))
             print(f"  WARNING: trailing BTC B-side run exited {rc_tb}; baseline will still update.")
+
+        # --- Regime summary (per regime-map handoff; appends to data/regime_log/) ---
+        rc_rs = _run(REGIME_SUMMARY_CMD)
+        if rc_rs != 0:
+            lane_failures.append((" ".join(REGIME_SUMMARY_CMD[1:]), rc_rs))
+            print(f"  WARNING: regime summary exited {rc_rs}; baseline will still update.")
+        else:
+            print("  regime summary ok.")
 
     print("\n>>> Main pipeline succeeded. Updating baseline.")
     payload = update_baseline()
