@@ -4,6 +4,23 @@
 
 ---
 
+## 2026-08-03 - Deterministic regime map
+
+Codex added the first rule-based regime layer for AI-assisted strategy routing.
+
+**What changed**
+- Added `src/strategy/regime.py` with deterministic candle-regime labels, liquidation-response labels, and asset-specific routing decisions.
+- Added `tests/test_regime.py` covering BTC B-side continuation watch routing, ETH rejection, HYPE B-side range research routing, and compressed HYPE rejection.
+- Added `docs/2026-08-03-HANDOFF-regime-map.md` with the Marvis delegation checklist and promotion guard.
+
+**Current read**
+- BTC B-side failed-reclaim continuation remains a v1 watch pocket, not auto-trade.
+- ETH remains rejected under the current framing.
+- HYPE B-side normal/wide range remains research-only; compressed HYPE remains rejected.
+- SOL/DOGE/BNB remain collect-only.
+
+---
+
 ## 2026-08-03 - Secret ignore hardening
 
 Codex tightened `.gitignore` for local secrets and credential exports.
