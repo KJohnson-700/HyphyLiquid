@@ -1,6 +1,6 @@
 """Run the cascade-rebuild + backtest cycle and update the baseline.
 
-Wraps the twelve scripts Slim specified:
+Wraps the thirteen scripts Slim specified:
   scripts/build_cascades.py              --time-window 60 --max-snapshot-lag 120
   scripts/run_fade_or_follow_backtest.py --horizon 15 --wait 3 --max-entry-lag 2
   scripts/run_lane_backtest.py           --lane btc_eth_fade_or_follow
@@ -14,14 +14,16 @@ Wraps the twelve scripts Slim specified:
                                           --horizons 120,240 --stop-models event_vwap,fixed_bps \
                                           --initial-stops-bps 30,50 --vwap-buffers-bps 15,25 \
                                           --activation-rs 1,1.5,2 --trail-bps 10,15,25 --top 25
+  scripts/run_filter_diagnostics.py      (feature-bucket diagnostics for BTC/ETH)
   scripts/run_regime_summary.py          (post-pipeline evidence collector per
                                           docs/2026-08-03-HANDOFF-regime-map.md)
   scripts/paper_decision_loop.py         --once --max-new 500
 
 The first two are the v1 main pipeline and must both succeed before the
-baseline is updated. The ten subsequent runs (two lane sweeps + two
+baseline is updated. The subsequent runs (two lane sweeps + two
 focused side-filtered + three TP/SL sweeps + one trailing sweep + one
-regime summary + one live-like paper update) are best-effort reporting;
+filter diagnostic + one regime summary + one live-like paper update)
+are best-effort reporting;
 their failures are logged but do NOT block the baseline update.
 
 Post-cycle threshold checks (printed as FLAG lines, do not fail the run):
@@ -33,9 +35,9 @@ Post-cycle threshold checks (printed as FLAG lines, do not fail the run):
     median_net_return_pct > 0 -> FLAG
 
 Behavior:
-  - default: check trigger; if HOLD, print status and exit 0; if FIRE, run all nine
+  - default: check trigger; if HOLD, print status and exit 0; if FIRE, run the cycle
   - --check: just print trigger state, no subprocess calls
-  - --force: run all nine unconditionally (skips trigger check)
+  - --force: run the cycle unconditionally (skips trigger check)
   - --dry-run: print the planned commands without executing
   - --skip-lanes: run only the main pipeline (v1 backtest only)
 
@@ -124,6 +126,7 @@ TRAILING_BTC_B_CMD = [
     "--trail-bps", "10,15,25",
     "--top", "25",
 ]
+FILTER_DIAGNOSTICS_CMD = [PYTHON, "scripts/run_filter_diagnostics.py", "--min-n", "20", "--top", "30"]
 REGIME_SUMMARY_CMD = [PYTHON, "scripts/run_regime_summary.py"]
 PAPER_DECISION_CMD = [PYTHON, "scripts/paper_decision_loop.py", "--once", "--max-new", "500"]
 ALL_CMDS = [
@@ -137,6 +140,7 @@ ALL_CMDS = [
     TP_SL_ETH_CMD,
     TP_SL_HYPE_B_CMD,
     TRAILING_BTC_B_CMD,
+    FILTER_DIAGNOSTICS_CMD,
     REGIME_SUMMARY_CMD,
     PAPER_DECISION_CMD,
 ]
@@ -463,6 +467,14 @@ def main() -> int:
         if rc_tb != 0:
             lane_failures.append((" ".join(TRAILING_BTC_B_CMD[1:]), rc_tb))
             print(f"  WARNING: trailing BTC B-side run exited {rc_tb}; baseline will still update.")
+
+        # --- BTC/ETH deterministic filter diagnostics (best-effort) ---
+        rc_fd = _run(FILTER_DIAGNOSTICS_CMD)
+        if rc_fd != 0:
+            lane_failures.append((" ".join(FILTER_DIAGNOSTICS_CMD[1:]), rc_fd))
+            print(f"  WARNING: filter diagnostics exited {rc_fd}; baseline will still update.")
+        else:
+            print("  filter diagnostics ok.")
 
         # --- Regime summary (per regime-map handoff; appends to data/regime_log/) ---
         rc_rs = _run(REGIME_SUMMARY_CMD)

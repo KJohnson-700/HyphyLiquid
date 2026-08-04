@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-08-04 - Add BTC/ETH filter diagnostics
+
+Codex added the first deterministic filter readout for the BTC/ETH v1 lane.
+
+**What changed**
+- Added `src/strategy/filter_diagnostics.py` to join BTC/ETH lane trades back to enriched cascade features.
+- Added `scripts/run_filter_diagnostics.py` to rank feature buckets by win rate, average/median return, PF, and outlier concentration.
+- Wired the filter diagnostic into `scripts/run_rebuild_cycle.py` as a best-effort post-trailing step so each rebuild produces `data/btc_eth_filter_diagnostics.json`.
+- Added focused unit tests for spread, imbalance, funding, size, staleness, enrichment, and min-sample behavior.
+
+---
+
 ## 2026-08-04 - Fix HIP-3 xyz symbol wiring
 
 Codex corrected the HIP-3 metal collector wiring so gold/silver can actually flow.
