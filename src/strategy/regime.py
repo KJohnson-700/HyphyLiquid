@@ -12,7 +12,7 @@ from typing import Iterable
 from src.strategy.lane_backtest import atr_at, bollinger_at
 
 V1_TRADE_SYMBOLS = {"BTC", "ETH"}
-RESEARCH_SYMBOLS = {"SOL", "HYPE", "DOGE", "BNB"}
+RESEARCH_SYMBOLS = {"SOL", "HYPE", "DOGE", "BNB", "XYZ:GOLD", "XYZ:SILVER"}
 
 
 @dataclass(frozen=True)

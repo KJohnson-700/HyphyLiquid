@@ -52,6 +52,10 @@ from src.strategy.regime import (  # noqa: E402
     classify_liquidation_response,
     route_signal,
 )
+# 2026-08-03: HIP-3 (xyz:) probe symbols added to data collection.
+# Hard guardrail unchanged: v1_trade_symbols stays {BTC, ETH}.
+HIP3_PROBE_SYMBOLS = ("XYZ:GOLD", "XYZ:SILVER")
+ALL_SYMBOLS = sorted(V1_TRADE_SYMBOLS | RESEARCH_SYMBOLS | set(HIP3_PROBE_SYMBOLS))
 
 CASCADES_PATH = REPO_ROOT / "data" / "cascades.jsonl"
 BASELINE_PATH = REPO_ROOT / "data" / ".rebuild_baseline.json"
@@ -61,7 +65,6 @@ LANE_BTC_B_TRADES = REPO_ROOT / "data" / "lane_backtest_btc_eth_fade_or_follow_b
 LANE_HYPE_B_TRADES = REPO_ROOT / "data" / "lane_backtest_alt_range_liq_scalp_hype_side_b_trades.jsonl"
 TRAILING_BTC_B_JSON = REPO_ROOT / "data" / "trailing_sweep_btc_eth_btc_side_b.json"
 REGIME_LOG_DIR = REPO_ROOT / "data" / "regime_log"
-ALL_SYMBOLS = sorted(V1_TRADE_SYMBOLS | RESEARCH_SYMBOLS)
 
 # Promotion gate per the regime-map handoff doc (Promotion Guard section).
 PROMOTION_N_THRESHOLD = 100

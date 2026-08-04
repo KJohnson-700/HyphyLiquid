@@ -24,7 +24,7 @@ BACKTEST_GUARD_HOURS = 24
 # Symbol split per the spec (AGENTS.md §1 Strategy, two-track framing).
 # v1 = active build/execution. Research = passive data collection only.
 V1_TRADE_SYMBOLS = ("BTC", "ETH")
-RESEARCH_SYMBOLS = ("SOL", "HYPE", "DOGE", "BNB")
+RESEARCH_SYMBOLS = ("SOL", "HYPE", "DOGE", "BNB", "XYZ:GOLD", "XYZ:SILVER")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))

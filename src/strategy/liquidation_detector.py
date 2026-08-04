@@ -78,6 +78,11 @@ PER_SYMBOL_THRESHOLDS: dict[str, dict] = {
     "BNB":  {"single_trade_min": 100_000.0, "burst_total_min": 250_000.0},
     # BTC: explicit so it shows up in the table
     "BTC":  {"single_trade_min": 500_000.0, "burst_total_min": 1_000_000.0},
+    # HIP-3 (xyz:) probe — 2026-08-03, research-only. Conservative to
+    # over-capture events in the first 24-72h while we learn the
+    # typical trade sizes. Slim to tune after seeing live distributions.
+    "XYZ:GOLD":   {"single_trade_min": 50_000.0,  "burst_total_min": 150_000.0},
+    "XYZ:SILVER": {"single_trade_min": 25_000.0,  "burst_total_min": 75_000.0},
 }
 
 

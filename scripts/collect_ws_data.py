@@ -34,7 +34,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import websocket  # from hyperliquid SDK's deps
 
 WS_URL = "wss://api.hyperliquid.xyz/ws"
-SYMBOLS = ("BTC", "ETH", "SOL", "HYPE", "DOGE", "BNB")
+# v1 trade symbols (active execution): BTC, ETH
+# research symbols (data collection only): SOL, HYPE, DOGE, BNB
+# hip3 probe (2026-08-03): XYZ:GOLD, XYZ:SILVER — research-only, no execution
+SYMBOLS = ("BTC", "ETH", "SOL", "HYPE", "DOGE", "BNB", "XYZ:GOLD", "XYZ:SILVER")
 RECONNECT_DELAY_S = 5
 DATA_ROOT = PROJECT_ROOT / "data"
 
