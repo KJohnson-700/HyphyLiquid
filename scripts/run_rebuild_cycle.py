@@ -1,6 +1,6 @@
 """Run the cascade-rebuild + backtest cycle and update the baseline.
 
-Wraps the eleven scripts Slim specified:
+Wraps the twelve scripts Slim specified:
   scripts/build_cascades.py              --time-window 60 --max-snapshot-lag 120
   scripts/run_fade_or_follow_backtest.py --horizon 15 --wait 3 --max-entry-lag 2
   scripts/run_lane_backtest.py           --lane btc_eth_fade_or_follow
@@ -16,12 +16,13 @@ Wraps the eleven scripts Slim specified:
                                           --activation-rs 1,1.5,2 --trail-bps 10,15,25 --top 25
   scripts/run_regime_summary.py          (post-pipeline evidence collector per
                                           docs/2026-08-03-HANDOFF-regime-map.md)
+  scripts/paper_decision_loop.py         --once --max-new 500
 
 The first two are the v1 main pipeline and must both succeed before the
-baseline is updated. The nine subsequent runs (two lane sweeps + two
+baseline is updated. The ten subsequent runs (two lane sweeps + two
 focused side-filtered + three TP/SL sweeps + one trailing sweep + one
-regime summary) are best-effort reporting; their failures are logged but
-do NOT block the baseline update.
+regime summary + one live-like paper update) are best-effort reporting;
+their failures are logged but do NOT block the baseline update.
 
 Post-cycle threshold checks (printed as FLAG lines, do not fail the run):
   - BTC B-side reclaim_fade: n >= 75 and PF > 1.5 -> FLAG
@@ -124,6 +125,7 @@ TRAILING_BTC_B_CMD = [
     "--top", "25",
 ]
 REGIME_SUMMARY_CMD = [PYTHON, "scripts/run_regime_summary.py"]
+PAPER_DECISION_CMD = [PYTHON, "scripts/paper_decision_loop.py", "--once", "--max-new", "500"]
 ALL_CMDS = [
     BUILD_CMD,
     BACKTEST_CMD,
@@ -136,6 +138,7 @@ ALL_CMDS = [
     TP_SL_HYPE_B_CMD,
     TRAILING_BTC_B_CMD,
     REGIME_SUMMARY_CMD,
+    PAPER_DECISION_CMD,
 ]
 
 # Threshold alerts (per Slim's operating rules, 2026-08-03)
@@ -468,6 +471,14 @@ def main() -> int:
             print(f"  WARNING: regime summary exited {rc_rs}; baseline will still update.")
         else:
             print("  regime summary ok.")
+
+        # --- Live-like paper lane update (best-effort, no exchange calls) ---
+        rc_pd = _run(PAPER_DECISION_CMD)
+        if rc_pd != 0:
+            lane_failures.append((" ".join(PAPER_DECISION_CMD[1:]), rc_pd))
+            print(f"  WARNING: paper decision loop exited {rc_pd}; baseline will still update.")
+        else:
+            print("  paper decision loop ok.")
 
     print("\n>>> Main pipeline succeeded. Updating baseline.")
     payload = update_baseline()

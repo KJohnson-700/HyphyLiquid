@@ -78,7 +78,8 @@ Status now surfaces these counts under `LIVE-LIKE PAPER LANE`.
 
 Marvis can safely do the low-level operator work:
 
-- Run `scripts/paper_decision_loop.py --once --max-new 500` after each rebuild.
+- The rebuild wrapper now runs `scripts/paper_decision_loop.py --once --max-new 500`
+  after each rebuild as a best-effort paper-ledger update.
 - If stable for a few passes, start it as a daemon at a 60-second interval.
 - Watch `scripts/status.py` for:
   - decisions increasing,
@@ -91,6 +92,5 @@ Marvis can safely do the low-level operator work:
 
 ## Next engineering step
 
-Wire `scripts/run_rebuild_cycle.py` to call the paper decision loop after the
-cascade rebuild, then daemonize the paper loop only after one more clean status
-check.
+Run the currently ready rebuild trigger, review the updated status, then
+daemonize the paper loop only after one more clean paper-ledger pass.

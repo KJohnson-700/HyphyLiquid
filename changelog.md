@@ -14,6 +14,7 @@ Codex implemented the first live-like paper lane for the actual BTC/HYPE liquida
 - Added `tests/test_paper_decision_loop.py` for same-bar stop ordering, BTC/HYPE route opening, and restart de-duplication.
 - Added `LIVE-LIKE PAPER LANE` to `scripts/status.py`.
 - Added `docs/2026-08-03-IMPLEMENTATION-live-like-paper-lane.md`.
+- Wired `scripts/run_rebuild_cycle.py` to run `scripts/paper_decision_loop.py --once --max-new 500` as the final best-effort step after regime summary.
 
 **First corrected run**
 - `scripts/paper_decision_loop.py --once --max-new 500`
