@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-08-03 - BTC/HYPE paper launch plan
+
+Codex added the paper-launch plan for the actual BTC/HYPE liquidation-regime lanes.
+
+**Decision**
+- Start planning paper now; paper is the live-sequence calibration lab, not the final proof step.
+- BTC B-side failed-reclaim continuation with trailing-resolution exit is the v1 paper candidate.
+- HYPE B-side range/liquidation scalp is research-paper only.
+- ETH/SOL/DOGE/BNB/XYZ:GOLD/XYZ:SILVER remain collect-only.
+
+**What changed**
+- Added `docs/2026-08-03-PLAN-paper-launch-btc-hype.md`.
+- The plan calls for a new `scripts/paper_decision_loop.py` instead of bending the existing HyperPerps heatmap `paper_trade_loop.py`, because the old loop does not paper the exact BTC/HYPE liquidation-regime lanes.
+
+---
+
 ## 2026-08-03 - Post-rebuild regime summary (Marvis)
 
 Marvis started logging regime evidence per the regime-map handoff checklist.
