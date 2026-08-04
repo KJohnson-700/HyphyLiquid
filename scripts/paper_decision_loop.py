@@ -28,6 +28,7 @@ from src.strategy.fade_or_follow_backtest import (
     _fade_direction,
     find_entry_idx,
 )
+from src.strategy.filter_diagnostics import imbalance_bucket
 from src.strategy.lane_backtest import _range_confirmation, bollinger_at
 from src.strategy.regime import classify_candle_regime, classify_liquidation_response, route_signal
 
@@ -42,6 +43,7 @@ BTC_MAX_HOLD_MINUTES = 240
 BTC_EVENT_VWAP_BUFFER_BPS = 15.0
 BTC_ACTIVATION_R = 2.0
 BTC_TRAIL_BPS = 10.0
+BTC_REQUIRED_IMBALANCE_BUCKET = "ask_heavy"
 
 HYPE_MAX_HOLD_MINUTES = 15
 HYPE_STOP_BUFFER_BPS = 5.0
@@ -317,6 +319,19 @@ def _build_btc_position(
     direction = _continuation_direction(side)
     if direction != "long":
         return PaperDecision(**base, decision="reject", reason="BTC paper currently only accepts B-side long continuation"), None
+    book_imbalance = imbalance_bucket(cascade.get("top_book_imbalance"))
+    if book_imbalance != BTC_REQUIRED_IMBALANCE_BUCKET:
+        return (
+            PaperDecision(
+                **base,
+                decision="reject",
+                reason=(
+                    "BTC filtered paper gate requires "
+                    f"top_book_imbalance={BTC_REQUIRED_IMBALANCE_BUCKET}, got {book_imbalance}"
+                ),
+            ),
+            None,
+        )
     stop = event_vwap * (1.0 - BTC_EVENT_VWAP_BUFFER_BPS / 10_000.0)
     if stop >= entry_price:
         return PaperDecision(**base, decision="reject", reason="event_vwap stop is not below long entry"), None
@@ -354,12 +369,23 @@ def _build_btc_position(
         ),
         metadata={
             "event_vwap": event_vwap,
+            "paper_gate": f"top_book_imbalance={BTC_REQUIRED_IMBALANCE_BUCKET}",
+            "top_book_imbalance": cascade.get("top_book_imbalance"),
+            "top_book_imbalance_bucket": book_imbalance,
             "wait_minutes": BTC_WAIT_MINUTES,
             "initial_stop_bps": round(stop_bps, 4),
             "activation_r": BTC_ACTIVATION_R,
         },
     )
-    return PaperDecision(**base, decision="open_position", reason="BTC B-side failed-reclaim continuation", paper_id=paper_id), position
+    return (
+        PaperDecision(
+            **base,
+            decision="open_position",
+            reason=f"BTC B-side failed-reclaim continuation with {book_imbalance} book",
+            paper_id=paper_id,
+        ),
+        position,
+    )
 
 
 def _build_hype_position(cascade: dict, candles: list[dict], entry_idx: int) -> tuple[PaperDecision, PaperPosition | None]:

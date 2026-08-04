@@ -12,6 +12,7 @@ Codex added the first deterministic filter readout for the BTC/ETH v1 lane.
 - Added `src/strategy/filter_diagnostics.py` to join BTC/ETH lane trades back to enriched cascade features.
 - Added `scripts/run_filter_diagnostics.py` to rank feature buckets by win rate, average/median return, PF, and outlier concentration.
 - Wired the filter diagnostic into `scripts/run_rebuild_cycle.py` as a best-effort post-trailing step so each rebuild produces `data/btc_eth_filter_diagnostics.json`.
+- Tightened the live-like BTC paper lane to only open the filtered BTC B-side failed-reclaim continuation candidate when the event top book is `ask_heavy`.
 - Added focused unit tests for spread, imbalance, funding, size, staleness, enrichment, and min-sample behavior.
 
 ---

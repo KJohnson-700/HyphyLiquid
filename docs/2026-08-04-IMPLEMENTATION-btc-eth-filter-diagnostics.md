@@ -58,6 +58,8 @@ Codex should implement a paper-only gate candidate for:
 
 `BTC side=B + failed_reclaim_continuation + top_book_imbalance_bucket == ask_heavy`
 
+Implemented in the live-like paper loop after the first diagnostic read. BTC paper positions now require the filtered `ask_heavy` top-book bucket before opening. This remains paper-only and does not change the `OrderManager` execution allowlist.
+
 Recommended guardrails before live:
 
 - paper-only first

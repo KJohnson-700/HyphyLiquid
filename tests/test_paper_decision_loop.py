@@ -114,6 +114,7 @@ class TestPaperDecisionLoop(unittest.TestCase):
                     "event_vwap": 104.0,
                     "n_fills": 12,
                     "total_notional": 500000,
+                    "top_book_imbalance": -0.5,
                 },
                 {
                     "symbol": "HYPE",
@@ -149,6 +150,41 @@ class TestPaperDecisionLoop(unittest.TestCase):
 
             second = run_once(data_dir=data_dir, state_path=state_path, max_new=10)
             self.assertEqual(second["positions_opened"], 0)
+
+    def test_btc_filtered_gate_rejects_non_ask_heavy_book(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            state_path = data_dir / ".paper_decision_state.json"
+            btc_base = _ms("2026-08-04T00:00:00+00:00")
+            btc_candles = [_bar(btc_base + i * 60_000, 100 + i * 0.2) for i in range(25)]
+            btc_candles.extend([
+                _bar(btc_base + 25 * 60_000, 106.0, h=106.5, l=105.8),
+                _bar(btc_base + 26 * 60_000, 106.4, h=106.5, l=106.3),
+            ])
+            _write_jsonl(data_dir / "ws_candle" / "btc_2026-08-04.jsonl", [{"payload": c} for c in btc_candles])
+            _write_jsonl(
+                data_dir / "cascades.jsonl",
+                [
+                    {
+                        "symbol": "BTC",
+                        "side": "B",
+                        "start_ts": "2026-08-04T00:20:30+00:00",
+                        "event_vwap": 104.0,
+                        "n_fills": 12,
+                        "total_notional": 500000,
+                        "top_book_imbalance": 0.1,
+                    }
+                ],
+            )
+
+            result = run_once(data_dir=data_dir, state_path=state_path, max_new=10)
+
+            self.assertEqual(result["positions_opened"], 0)
+            decisions = list(data_dir.glob("paper_decisions_*.jsonl"))
+            self.assertEqual(len(decisions), 1)
+            decision_rows = [json.loads(line) for line in decisions[0].read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(decision_rows[0]["decision"], "reject")
+            self.assertIn("top_book_imbalance=ask_heavy", decision_rows[0]["reason"])
 
 
 if __name__ == "__main__":
