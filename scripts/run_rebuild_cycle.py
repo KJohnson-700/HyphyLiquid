@@ -1,6 +1,6 @@
 """Run the cascade-rebuild + backtest cycle and update the baseline.
 
-Wraps the nine scripts Slim specified:
+Wraps the ten scripts Slim specified:
   scripts/build_cascades.py              --time-window 60 --max-snapshot-lag 120
   scripts/run_fade_or_follow_backtest.py --horizon 15 --wait 3 --max-entry-lag 2
   scripts/run_lane_backtest.py           --lane btc_eth_fade_or_follow
@@ -10,17 +10,24 @@ Wraps the nine scripts Slim specified:
   scripts/run_tp_sl_sweep.py             --lane btc_eth_fade_or_follow --symbol BTC --side B
   scripts/run_tp_sl_sweep.py             --lane btc_eth_fade_or_follow --symbol ETH
   scripts/run_tp_sl_sweep.py             --lane alt_range_liq_scalp         --symbol HYPE --side B
+  scripts/run_trailing_sweep.py          --symbol BTC --side B \
+                                          --horizons 120,240 --stop-models event_vwap,fixed_bps \
+                                          --initial-stops-bps 30,50 --vwap-buffers-bps 15,25 \
+                                          --activation-rs 1,1.5,2 --trail-bps 10,15,25 --top 25
 
 The first two are the v1 main pipeline and must both succeed before the
-baseline is updated. The seven subsequent runs (two lane sweeps + two
-focused side-filtered + three TP/SL sweeps) are best-effort reporting;
-their failures are logged but do NOT block the baseline update.
+baseline is updated. The eight subsequent runs (two lane sweeps + two
+focused side-filtered + three TP/SL sweeps + one trailing sweep) are
+best-effort reporting; their failures are logged but do NOT block the
+baseline update.
 
-Post-cycle threshold checks (printed as ALERT lines, do not fail the run):
+Post-cycle threshold checks (printed as FLAG lines, do not fail the run):
   - BTC B-side reclaim_fade: n >= 75 and PF > 1.5 -> FLAG
   - BTC B-side reclaim_fade: n >= 100 and PF > 1.5 -> FLAG
   - BTC side=B (any variant) total n >= 175 -> FLAG
   - HYPE side=B (any variant) n >= 20 -> FLAG
+  - BTC B-side trailing (best row across the sweep): n >= 100, PF > 1.5,
+    median_net_return_pct > 0 -> FLAG
 
 Behavior:
   - default: check trigger; if HOLD, print status and exit 0; if FIRE, run all nine
@@ -101,6 +108,19 @@ TP_SL_HYPE_B_CMD = [
     "--lane", "alt_range_liq_scalp",
     "--symbol", "HYPE", "--side", "B",
 ]
+TRAILING_BTC_B_CMD = [
+    PYTHON,
+    "scripts/run_trailing_sweep.py",
+    "--symbol", "BTC",
+    "--side", "B",
+    "--horizons", "120,240",
+    "--stop-models", "event_vwap,fixed_bps",
+    "--initial-stops-bps", "30,50",
+    "--vwap-buffers-bps", "15,25",
+    "--activation-rs", "1,1.5,2",
+    "--trail-bps", "10,15,25",
+    "--top", "25",
+]
 ALL_CMDS = [
     BUILD_CMD,
     BACKTEST_CMD,
@@ -111,12 +131,19 @@ ALL_CMDS = [
     TP_SL_BTC_B_CMD,
     TP_SL_ETH_CMD,
     TP_SL_HYPE_B_CMD,
+    TRAILING_BTC_B_CMD,
 ]
 
 # Threshold alerts (per Slim's operating rules, 2026-08-03)
 BTC_B_RECLAIM_PF_FLAG_THRESHOLDS = [75, 100]
 BTC_SIDE_B_TOTAL_N_FLAG_THRESHOLD = 175
 HYPE_SIDE_B_TOTAL_N_FLAG_THRESHOLD = 20
+BTC_B_TRAILING_N_THRESHOLD = 100
+BTC_B_TRAILING_PF_THRESHOLD = 1.5
+
+# Path to the trailing sweep JSON output for BTC B-side (matches
+# scripts/run_trailing_sweep.py suffix logic).
+TRAILING_BTC_B_JSON = REPO_ROOT / "data" / "trailing_sweep_btc_eth_btc_side_b.json"
 
 
 def _print_trigger(info: dict, should_fire: bool) -> None:
@@ -270,6 +297,87 @@ def _check_thresholds(btc_b_output: str, hype_b_output: str) -> list[str]:
     return alerts
 
 
+def _check_trailing_threshold(json_path: Path = TRAILING_BTC_B_JSON) -> list[str]:
+    """Check the BTC B-side trailing sweep JSON for Slim's watchlist condition.
+
+    Slim's rule (2026-08-03): best row across the sweep with n >= 100,
+    profit_factor > 1.5, and median_net_return_pct > 0 -> FLAG (paper-eligible).
+
+    The trailing sweep sorts display by PF desc, but we re-rank here so the
+    analysis is independent of the script's --top cutoff. We require
+    stop_model in {fixed_bps, event_vwap} (Slim's specified scope) and the
+    row to have at least one valid numeric value. We skip rows that are
+    missing any of the threshold fields rather than treating them as 0/None.
+    """
+    alerts: list[str] = []
+    if not json_path.exists():
+        return [f"  BTC B-side trailing: JSON missing at {json_path.name} (run not completed?)"]
+
+    try:
+        import json as _json
+        rows = _json.loads(json_path.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        return [f"  BTC B-side trailing: failed to parse {json_path.name}: {exc}"]
+
+    if not isinstance(rows, list) or not rows:
+        return [f"  BTC B-side trailing: {json_path.name} is empty"]
+
+    eligible: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("symbol", "")).upper() != "BTC":
+            continue
+        if str(row.get("side", row.get("lane", ""))).upper() not in ("B", "BTC_B", "BTC_SIDE_B"):
+            # The trailing sweep doesn't tag side per-row, but the JSON
+            # filename guarantees the run was --side B. So all rows are
+            # implicitly BTC side=B when this function reads the BTC B-side
+            # file. Keep this guard for safety in case the file is reused.
+            pass
+        if str(row.get("stop_model", "")) not in ("fixed_bps", "event_vwap"):
+            continue
+        try:
+            n = int(row.get("n", 0))
+            pf = float(row.get("profit_factor", 0.0))
+            med = float(row.get("median_net_return_pct", 0.0))
+        except (TypeError, ValueError):
+            continue
+        eligible.append({"n": n, "pf": pf, "med": med, "row": row})
+
+    if not eligible:
+        return [f"  BTC B-side trailing: no eligible rows in {json_path.name}"]
+
+    # Rank: highest PF first, tiebreak by n desc, then by med desc.
+    eligible.sort(key=lambda e: (-e["pf"], -e["n"], -e["med"]))
+    best = eligible[0]
+    best_row = best["row"]
+
+    if best["n"] >= BTC_B_TRAILING_N_THRESHOLD and best["pf"] > BTC_B_TRAILING_PF_THRESHOLD and best["med"] > 0:
+        alerts.append(
+            f"  FLAG: BTC B-side trailing best row "
+            f"(variant={best_row.get('variant')}, "
+            f"horizon={best_row.get('horizon')}, "
+            f"stop={best_row.get('stop_model')}, "
+            f"cfg={best_row.get('config_initial_stop_bps') or best_row.get('vwap_buffer_bps') or best_row.get('atr_mult')}, "
+            f"actR={best_row.get('activation_r')}, trail={best_row.get('trail_bps')}): "
+            f"n={best['n']} PF={best['pf']:.2f} med={best['med']:+.4f}% "
+            f"(>= 100 / > 1.5 / > 0) -- consider paper"
+        )
+    else:
+        # Show top 3 for context
+        top3 = eligible[:3]
+        top3_str = ", ".join(
+            f"n={e['n']} PF={e['pf']:.2f} med={e['med']:+.4f}%"
+            for e in top3
+        )
+        alerts.append(
+            f"  BTC B-side trailing: best n={best['n']} PF={best['pf']:.2f} "
+            f"med={best['med']:+.4f}% (need n>={BTC_B_TRAILING_N_THRESHOLD}, "
+            f"PF>{BTC_B_TRAILING_PF_THRESHOLD}, med>0)  top3: [{top3_str}]"
+        )
+    return alerts
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
@@ -343,6 +451,12 @@ def main() -> int:
             lane_failures.append((" ".join(FOCUSED_HYPE_B_CMD[1:]), rc_hb))
             print(f"  WARNING: focused HYPE B-side run exited {rc_hb}; baseline will still update.")
 
+        # --- Trailing resolution sweep (BTC B-side, best-effort, JSON read for threshold) ---
+        rc_tb, _trailing_b_output = _run_capture(TRAILING_BTC_B_CMD)
+        if rc_tb != 0:
+            lane_failures.append((" ".join(TRAILING_BTC_B_CMD[1:]), rc_tb))
+            print(f"  WARNING: trailing BTC B-side run exited {rc_tb}; baseline will still update.")
+
     print("\n>>> Main pipeline succeeded. Updating baseline.")
     payload = update_baseline()
     print(f"baseline: {payload}")
@@ -350,6 +464,11 @@ def main() -> int:
     if not args.skip_lanes and (btc_b_output or hype_b_output):
         print("\n>>> Threshold checks:")
         for alert in _check_thresholds(btc_b_output, hype_b_output):
+            print(alert)
+
+    if not args.skip_lanes:
+        print("\n>>> Trailing resolution threshold check:")
+        for alert in _check_trailing_threshold():
             print(alert)
 
     if lane_failures:
