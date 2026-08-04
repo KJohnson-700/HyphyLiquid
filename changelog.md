@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-08-03 - Post-rebuild regime summary (Marvis)
+
+Marvis started logging regime evidence per the regime-map handoff checklist.
+
+**What changed**
+- Added `scripts/run_regime_summary.py` (collector, no interpretation): implements the 7-step checklist from `docs/2026-08-03-HANDOFF-regime-map.md` (rebuild metadata, per-symbol regime counts, BTC watch pocket from trailing sweep, ETH rejected lane, HYPE research pocket by band_width, safety gate).
+- Added `tests/test_regime_summary.py` (13 focused tests for the pure helpers, all passing).
+- Wired the script into `scripts/run_rebuild_cycle.py` as the 11th command in the chain (best-effort, does not block baseline). Cycle now runs: build_cascades, fade_or_follow backtest, 2 lane backtests, 2 focused side-filtered runs, 3 TP/SL sweeps, 1 trailing sweep, 1 regime summary.
+- Output appends to `data/regime_log/regime_summary_YYYYMMDD.jsonl` (gitignored via `data/`).
+
+**First run (2026-08-04 01:05 UTC rebuild, commit de13bb7)**
+- 679 cascades (BTC 284, ETH 212, HYPE 102, SOL 66, DOGE 15; B 342 / A 337).
+- BTC watch pocket: best is failed_reclaim_continuation 240m event_vwap 15bps 1.5R 10bps trail, n=37, PF 1.09, med +0.0896%. Gate: n=False, pf=False, median=True. n and PF need to grow.
+- ETH rejected lane: 6 buckets, no crossed gate. Largest n=99 (baseline_fade A) with PF 0.98.
+- HYPE research pocket: 3 compressed (PF 0.45, all losses), 5 normal (PF 1.22), 2 wide (PF inf, all wins). Compressed bucket continues to lose.
+- Safety gate: 0 violations. SOL/HYPE/DOGE/BNB all execution_allowed=False.
+
+**Bugs caught and fixed during this work**
+- BTC watch pocket: `pf_met` was treating inf as 0 (false). Now uses `pf > threshold` directly, which handles inf correctly.
+- ETH rejected lane: same pf-vs-inf bug.
+- Regime script: HYPE trades use `net_return_pct`, not `return_pct`. Bucketing now reads `band_width_pct` and routes through `band_width_bucket()`.
+
+---
+
 ## 2026-08-03 - Deterministic regime map
 
 Codex added the first rule-based regime layer for AI-assisted strategy routing.
