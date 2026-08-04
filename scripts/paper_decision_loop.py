@@ -537,7 +537,11 @@ def main() -> int:
     parser.add_argument("--interval", type=int, default=60, help="Polling interval in seconds.")
     parser.add_argument("--max-new", type=int, default=250, help="Max recent cascades to scan per pass.")
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        stream=sys.stdout,
+    )
 
     while True:
         result = run_once(max_new=args.max_new)

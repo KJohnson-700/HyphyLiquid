@@ -34,6 +34,7 @@ LOG_DIR = PROJECT_ROOT / "logs"
 HEALTH_LOGS = (
     "ws_out.log",
     "liquidation_out.log",
+    "paper_decision_loop_out.log",
     "paper_trade_loop_out.log",
     "poll_asset_ctx_out.log",
     "poll_hyperperps_out.log",
@@ -42,6 +43,7 @@ HEALTH_LOGS = (
 ERROR_LOGS = (
     "ws_err.log",
     "liquidation_err.log",
+    "paper_decision_loop_err.log",
     "paper_trade_loop_err.log",
     "poll_asset_ctx_err.log",
     "poll_hyperperps_err.log",
