@@ -164,6 +164,41 @@ def show_paper_trades() -> None:
     print(f"    {last['reason']}")
 
 
+def show_paper_decision_lane() -> None:
+    _section("LIVE-LIKE PAPER LANE")
+    decision_files = sorted((PROJECT_ROOT / "data").glob("paper_decisions_*.jsonl"))
+    position_files = sorted((PROJECT_ROOT / "data").glob("paper_positions_*.jsonl"))
+    if not decision_files:
+        print("  (no BTC/HYPE paper-decision ledger yet)")
+        return
+    decisions = []
+    for path in decision_files:
+        decisions.extend(json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l)
+    positions = []
+    for path in position_files:
+        positions.extend(json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l)
+
+    opened = [p for p in positions if p.get("event") == "opened"]
+    marks = [p for p in positions if p.get("event") == "mark"]
+    closed_marks = [p for p in marks if p.get("fill", {}).get("status") == "closed"]
+    open_ids = {p.get("paper_id") for p in opened} - {p.get("paper_id") for p in closed_marks}
+    print(f"  Decisions: {len(decisions)}")
+    print(f"  Opened:    {len(opened)}")
+    print(f"  Closed:    {len(closed_marks)}")
+    print(f"  Open now:  {len(open_ids)}")
+    last = decisions[-1]
+    print(
+        f"  Last decision: {last['decision_ts']}  {last['symbol']}  "
+        f"{last['decision']}  scope={last['paper_scope']}"
+    )
+    if marks:
+        fill = marks[-1].get("fill", {})
+        print(
+            f"  Last mark:     {marks[-1].get('symbol')}  {fill.get('status')}  "
+            f"{fill.get('exit_reason') or 'mark'}  net={fill.get('net_return_pct')}%"
+        )
+
+
 def show_tests() -> None:
     _section("TESTS")
     r = subprocess.run(
@@ -347,6 +382,7 @@ def main() -> int:
     show_daemons()
     show_snapshots()
     show_paper_trades()
+    show_paper_decision_lane()
     show_backtest_readiness()
     show_tests()
     show_data()

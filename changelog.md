@@ -4,6 +4,26 @@
 
 ---
 
+## 2026-08-03 - Live-like BTC/HYPE paper lane
+
+Codex implemented the first live-like paper lane for the actual BTC/HYPE liquidation-regime strategies.
+
+**What changed**
+- Added `src/execution/paper_broker.py` with conservative stop/target/trailing simulation.
+- Added `scripts/paper_decision_loop.py`, consuming `data/cascades.jsonl` and `data/ws_candle/*.jsonl` without importing the real exchange or `OrderManager`.
+- Added `tests/test_paper_decision_loop.py` for same-bar stop ordering, BTC/HYPE route opening, and restart de-duplication.
+- Added `LIVE-LIKE PAPER LANE` to `scripts/status.py`.
+- Added `docs/2026-08-03-IMPLEMENTATION-live-like-paper-lane.md`.
+
+**First corrected run**
+- `scripts/paper_decision_loop.py --once --max-new 500`
+- Decisions written: 273.
+- Positions opened: 7.
+- Positions closed: 7.
+- Open now: 0.
+
+---
+
 ## 2026-08-03 - BTC/HYPE paper launch plan
 
 Codex added the paper-launch plan for the actual BTC/HYPE liquidation-regime lanes.
