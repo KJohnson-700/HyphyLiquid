@@ -5,15 +5,26 @@ rebuild cycles, with a STRICT decision rule that gates any scope
 discussion on:
 
   1. Repeated confirmation: both 30m and 60m H1 verdicts pass the
-     standard promotion gate in N_CONSECUTIVE_CYCLES cycles in a row
-     (default: 2).
+     standard promotion gate in consecutive cycles.
   2. Fixed calm definition: BTC 30m-realized-vol <= 5 bps/min stdev AND
      ETH <= 8 bps/min stdev. Same constants every cycle so verdicts
      are comparable.
   3. Paper simulation: a paper-only decision loop has produced at
      least PAPER_SIM_MIN_DECISIONS paper decisions tagged with the SOL
-     H1 setup. Until that count is non-zero, the watch status is
-     "watch-pending-paper".
+     H1 setup.
+
+Two-tier ladder (Slim's refinement, 2026-08-05):
+  - N_CONSECUTIVE_CYCLES = 2  -> status flips to "watch-tracking".
+    Signal is on-watch, but paper-routing is NOT yet a discussion point.
+  - N_PAPER_ROUTING_CYCLES = 3 -> with paper sim wired and ready, status
+    flips to "watch-confirmed" and paper-routing becomes a discussion
+    point.
+
+Status flow:
+  consecutive < 2         -> watch-pending       (gathering)
+  2 <= consecutive < 3    -> watch-tracking      (on watch)
+  consecutive >= 3, no paper sim  -> watch-pending-paper
+  consecutive >= 3, paper sim OK  -> watch-confirmed
 
 BTC and HYPE remain under observation; the report includes a brief
 status line for each (pulled from existing cycle outputs).
@@ -27,6 +38,7 @@ Run from cycle:
 
 Run standalone:
     python scripts/check_sol_h1_watch.py --cycles-required 2 \
+        --paper-routing-cycles 3 \
         --paper-sim-min-decisions 5
 """
 from __future__ import annotations
@@ -72,7 +84,15 @@ BTC_B_LANE_TRADES_PATH = REPO_ROOT / "data" / "lane_backtest_btc_eth_fade_or_fol
 LANE_HYPE_B_PATH = REPO_ROOT / "data" / "lane_backtest_alt_range_liq_scalp_hype_side_b_trades.jsonl"
 
 # Strict decision rule (per Slim 2026-08-05).
+# 2-tier ladder (Slim's refinement, 2026-08-05):
+#   - N_CONSECUTIVE_CYCLES (2) -> status flips from "watch-pending" to
+#     "watch-tracking". The signal is on-watch but not yet eligible for
+#     paper-routing discussion.
+#   - N_PAPER_ROUTING_CYCLES (3) -> with paper sim wired and ready,
+#     status flips to "watch-confirmed" and paper-routing becomes a
+#     discussion point.
 N_CONSECUTIVE_CYCLES: int = 2
+N_PAPER_ROUTING_CYCLES: int = 3
 # Minimum paper decisions tagged with the SOL H1 setup before the watch
 # can flip from "watch-pending-paper" to "watch-confirmed". Until the
 # paper lane is wired, the report just says "not wired".
@@ -266,6 +286,33 @@ def _verdict_to_dict(v: PromotionVerdict | None) -> dict[str, Any]:
     return d
 
 
+def _derive_watch_status(
+    consecutive_passes: int,
+    paper_sim_ready: bool,
+    watch_threshold: int = N_CONSECUTIVE_CYCLES,
+    paper_routing_threshold: int = N_PAPER_ROUTING_CYCLES,
+) -> str:
+    """Pure function: map (consecutive_passes, paper_sim_ready) -> status string.
+
+    Per Slim's 2026-08-05 two-tier ladder:
+      consecutive < watch_threshold (2)
+        -> "watch-pending"  (gathering data)
+      watch_threshold <= consecutive < paper_routing_threshold (3)
+        -> "watch-tracking" (on watch, paper-routing not yet a discussion)
+      consecutive >= paper_routing_threshold AND not paper_sim_ready
+        -> "watch-pending-paper"  (signal strong enough; paper lane not wired)
+      consecutive >= paper_routing_threshold AND paper_sim_ready
+        -> "watch-confirmed" (paper-routing is now a discussion point)
+    """
+    if consecutive_passes < watch_threshold:
+        return "watch-pending"
+    if consecutive_passes < paper_routing_threshold:
+        return "watch-tracking"
+    if not paper_sim_ready:
+        return "watch-pending-paper"
+    return "watch-confirmed"
+
+
 # ----------------------------- main -------------------------------------- #
 
 
@@ -277,7 +324,17 @@ def main() -> int:
         "--cycles-required",
         type=int,
         default=N_CONSECUTIVE_CYCLES,
-        help=f"Consecutive cycles required to flip to watch-confirmed (default {N_CONSECUTIVE_CYCLES})",
+        help=(
+            f"Consecutive cycles required to flip to watch-tracking (default {N_CONSECUTIVE_CYCLES})"
+        ),
+    )
+    parser.add_argument(
+        "--paper-routing-cycles",
+        type=int,
+        default=N_PAPER_ROUTING_CYCLES,
+        help=(
+            f"Consecutive cycles required to flip to watch-confirmed (default {N_PAPER_ROUTING_CYCLES})"
+        ),
     )
     parser.add_argument(
         "--paper-sim-min-decisions",
@@ -290,7 +347,8 @@ def main() -> int:
     print("=" * 78)
     print("SOL H1 RESEARCH WATCH — strict decision rule (research only)")
     print("=" * 78)
-    print(f"  Cycles required:    {args.cycles_required}")
+    print(f"  Watch threshold:    {args.cycles_required} (consec -> watch-tracking)")
+    print(f"  Paper-routing thr:  {args.paper_routing_cycles} (consec + paper sim -> watch-confirmed)")
     print(f"  Calm BTC:           {FIXED_CALM_VOL_BTC_30M} ({FIXED_CALM_VOL_BTC_30M*1e4:.1f} bps/min stdev)")
     print(f"  Calm ETH:           {FIXED_CALM_VOL_ETH_30M} ({FIXED_CALM_VOL_ETH_30M*1e4:.1f} bps/min stdev)")
     print(f"  Watched horizons:   {WATCH_HORIZONS}")
@@ -365,14 +423,14 @@ def main() -> int:
         new_consec = 0
         new_cum = prior_cum
 
-    # Status: strict decision rule
+    # Status: strict decision rule (two-tier ladder)
     paper_sim = _paper_sim_status()
-    if new_consec < args.cycles_required:
-        status = "watch-pending"
-    elif paper_sim["status"] != "ready":
-        status = "watch-pending-paper"
-    else:
-        status = "watch-confirmed"
+    status = _derive_watch_status(
+        consecutive_passes=new_consec,
+        paper_sim_ready=(paper_sim["status"] == "ready"),
+        watch_threshold=args.cycles_required,
+        paper_routing_threshold=args.paper_routing_cycles,
+    )
 
     btc_obs = _btc_observation()
     hype_obs = _hype_observation()
@@ -392,6 +450,7 @@ def main() -> int:
         status=status,
         decision_rule={
             "cycles_required": args.cycles_required,
+            "paper_routing_cycles": args.paper_routing_cycles,
             "paper_sim_min_decisions": args.paper_sim_min_decisions,
             "promotion_n": PROMOTION_N,
             "promotion_pf": PROMOTION_PF,
@@ -410,9 +469,12 @@ def main() -> int:
     print(f"  HYPE observation: {hype_obs}")
     print(f"  Paper sim:        {paper_sim}")
     print()
-    print(f"  Consecutive passes:  {new_consec} (need {args.cycles_required})")
+    print(f"  Consecutive passes:  {new_consec}")
     print(f"  Cumulative passes:   {new_cum}")
     print(f"  Watch status:        {status}")
+    print(f"  Ladder:              0-{args.cycles_required - 1} watch-pending | "
+          f"{args.cycles_required}-{args.paper_routing_cycles - 1} watch-tracking | "
+          f"{args.paper_routing_cycles}+ watch-pending-paper -> watch-confirmed")
     print()
     print(f"  Appended to: {WATCH_LOG_PATH.relative_to(REPO_ROOT)}")
     print()

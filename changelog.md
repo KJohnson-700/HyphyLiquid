@@ -4,6 +4,44 @@
 
 ---
 
+## 2026-08-05 - SOL H1 watch: two-tier ladder (2 watch / 3 paper-routing)
+
+Per Slim's 2026-08-05 refinement to the SOL H1 decision rule. Research-only. No execution wiring.
+
+**Slim's three knobs (locked)**
+- Calm threshold: BTC <= 5 bps/min stdev, ETH <= 8 bps/min stdev (kept as-is; do NOT tighten to 3/5 to recover the pass)
+- Watch threshold: 2 consecutive cycles -> `watch-tracking`
+- Paper-routing threshold: 3 consecutive cycles + paper sim wired -> `watch-confirmed`
+
+**Why the extra tier**
+Slim's call: the signal is interesting but not yet proven. With the fixed 5/8 bps thresholds, SOL H1 30m PF is 1.10 and 60m PF is 1.19, both below the 1.5 gate. The earlier 1.60/1.64 was threshold-sensitive (the run-median was 3.9 bps, tighter). Tightening to 3/5 to recover the pass would be curve-fitting — the guard did its job.
+
+**What changed**
+- Added `N_PAPER_ROUTING_CYCLES = 3` constant. New status tier `watch-tracking` between `watch-pending` and `watch-confirmed`.
+- Extracted pure `_derive_watch_status(consecutive, paper_ready, ...)` function. Two-tier ladder is now testable in isolation.
+- CLI flag `--paper-routing-cycles` to override the new threshold.
+- Decision rule logged in the watch record now includes both `cycles_required` and `paper_routing_cycles`.
+
+**Status flow (final)**
+- consecutive < 2         -> watch-pending       (gathering)
+- 2 <= consecutive < 3    -> watch-tracking      (on watch, paper-routing not yet a discussion)
+- consecutive >= 3, no paper sim  -> watch-pending-paper
+- consecutive >= 3, paper sim OK  -> watch-confirmed
+
+**Codex next task (per Slim)**
+Wire `paper_decision_loop.py` to tag decisions with `playbook: "sol_h1"` so the watch can detect paper sim readiness. Research-only; OrderManager stays blocked from execution.
+
+**Tests**
+- 9 new status-logic tests (covers all four status tiers + custom thresholds)
+- 78/78 tests passing across the two new test files
+
+**First read after refinement**
+- consecutive_passes=0, cumulative_passes=0
+- status=`watch-pending` (same as before — no new data has been collected)
+- BTC: n=528, PF 0.76. HYPE: n=22, PF 0.82.
+
+---
+
 ## 2026-08-05 - SOL H1 strict-decision-rule watch (research only)
 
 Per Slim's 2026-08-05 spec. Research-only watch tracking SOL H1 across rebuild cycles with a fixed calm definition, repeated-confirmation rule, and paper-sim requirement before any scope discussion. Zero execution wiring.

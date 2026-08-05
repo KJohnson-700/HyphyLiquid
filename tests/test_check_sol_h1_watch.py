@@ -19,9 +19,11 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.check_sol_h1_watch import (  # noqa: E402
     N_CONSECUTIVE_CYCLES,
+    N_PAPER_ROUTING_CYCLES,
     PAPER_SIM_MIN_DECISIONS,
     WatchCycleRecord,
     _btc_observation,
+    _derive_watch_status,
     _hype_observation,
     _load_prior_watch_log,
     _paper_sim_status,
@@ -274,5 +276,63 @@ def test_default_cycles_required():
     assert N_CONSECUTIVE_CYCLES == 2
 
 
+def test_default_paper_routing_cycles():
+    # Slim's 2026-08-05 refinement: 2 for watch-tracking, 3 for paper-routing
+    assert N_PAPER_ROUTING_CYCLES == 3
+    assert N_PAPER_ROUTING_CYCLES > N_CONSECUTIVE_CYCLES
+
+
 def test_default_paper_sim_min():
     assert PAPER_SIM_MIN_DECISIONS == 5
+
+
+# ------------------------- _derive_watch_status --------------------------- #
+
+
+def test_status_zero_consecutive():
+    assert _derive_watch_status(0, paper_sim_ready=False) == "watch-pending"
+
+
+def test_status_one_consecutive():
+    assert _derive_watch_status(1, paper_sim_ready=False) == "watch-pending"
+
+
+def test_status_two_consecutive_no_paper():
+    # 2 consecutive -> watch-tracking regardless of paper sim state
+    assert _derive_watch_status(2, paper_sim_ready=False) == "watch-tracking"
+    assert _derive_watch_status(2, paper_sim_ready=True) == "watch-tracking"
+
+
+def test_status_three_consecutive_no_paper():
+    # 3 consecutive but paper sim not ready -> watch-pending-paper
+    assert _derive_watch_status(3, paper_sim_ready=False) == "watch-pending-paper"
+
+
+def test_status_three_consecutive_with_paper():
+    # 3 consecutive + paper sim ready -> watch-confirmed
+    assert _derive_watch_status(3, paper_sim_ready=True) == "watch-confirmed"
+
+
+def test_status_four_consecutive_with_paper():
+    # Higher counts keep the watch-confirmed status
+    assert _derive_watch_status(10, paper_sim_ready=True) == "watch-confirmed"
+
+
+def test_status_uses_custom_thresholds():
+    # Custom thresholds should be honored
+    assert _derive_watch_status(
+        4, paper_sim_ready=False, watch_threshold=5, paper_routing_threshold=10
+    ) == "watch-pending"
+    assert _derive_watch_status(
+        5, paper_sim_ready=False, watch_threshold=5, paper_routing_threshold=10
+    ) == "watch-tracking"
+    assert _derive_watch_status(
+        10, paper_sim_ready=True, watch_threshold=5, paper_routing_threshold=10
+    ) == "watch-confirmed"
+
+
+def test_status_break_resets_to_pending():
+    # A break in the streak returns to watch-pending at 0
+    # (caller is responsible for resetting consecutive_passes; this test
+    # documents that 0 maps to watch-pending)
+    assert _derive_watch_status(0, paper_sim_ready=True) == "watch-pending"
