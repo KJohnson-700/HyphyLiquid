@@ -4,6 +4,26 @@
 
 ---
 
+## 2026-08-05 - Add research-only event range grid lane
+
+Codex added a bounded grid-style research backtest for assets that are weak under the current cascade lanes.
+
+**What changed**
+- Added `src/strategy/grid_backtest.py` with a research-only event-anchored range grid.
+- Added `scripts/run_grid_backtest.py` to test SOL/HYPE/DOGE/BNB and HIP-3 probes without touching execution.
+- Added `tests/test_grid_backtest.py` for range-sweep entry, scope rejection, band-bucket rejection, and summary output.
+
+**First read**
+- HYPE side=B: n=20, PF 1.81, avg +0.0521%, median -0.0721%.
+- HYPE side=B wide bucket: n=5, PF 5.03, median +0.1535%, sample too small.
+- HYPE normal bucket remains weak: n=15, PF 1.17, median -0.1057%.
+- DOGE/SOL/BNB/xyz:GOLD/xyz:SILVER are still too small or negative for action.
+
+**Decision**
+- Treat grid as research-only. It may help HYPE in wide range regimes, but the median problem and tiny wide-bucket sample mean no paper/live promotion yet.
+
+---
+
 ## 2026-08-05 - Add AI advisory guardrail contract
 
 Codex added the first safe integration point for AI-assisted regime/tape review.

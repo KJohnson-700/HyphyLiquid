@@ -18,6 +18,7 @@ VALID_PLAYBOOKS = frozenset(
     {
         "btc_b_failed_reclaim_ask_heavy",
         "hype_b_range_scalp_research",
+        "hype_b_wide_range_grid_research",
         "eth_rejected_collect_only",
         "alts_collect_only",
     }

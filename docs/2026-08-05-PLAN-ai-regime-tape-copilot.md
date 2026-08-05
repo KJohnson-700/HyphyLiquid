@@ -53,6 +53,9 @@ The deterministic bot still owns:
 - `hype_b_range_scalp_research`
   - Research-only HYPE B-side range scalp.
 
+- `hype_b_wide_range_grid_research`
+  - Research-only HYPE wide-band event range grid.
+
 - `eth_rejected_collect_only`
   - ETH remains rejected until diagnostics change.
 
