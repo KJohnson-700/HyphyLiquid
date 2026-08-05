@@ -51,6 +51,7 @@ class AdvisoryDecision:
     """
 
     decision_ts: str
+    model_id: str
     symbol: str
     action: str
     playbook: str | None
@@ -172,6 +173,7 @@ def validate_advisory(packet: AdvisoryPacket, raw: dict[str, Any]) -> AdvisoryDe
 
     return AdvisoryDecision(
         decision_ts=_utc_now(),
+        model_id=str(raw.get("model_id") or raw.get("model") or "unknown"),
         symbol=packet.symbol,
         action=action,
         playbook=playbook,

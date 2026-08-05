@@ -12,11 +12,13 @@ Codex added the first safe integration point for AI-assisted regime/tape review.
 - Added `src/strategy/ai_advisory.py` with a fail-closed advisory contract.
 - Added `scripts/run_ai_advisory_packet.py` to build bounded context packets from current diagnostics for an AI co-pilot.
 - Added tests proving AI advice cannot place orders, cannot promote research symbols into execution, and must include regime/tape/risk evidence before becoming execution-eligible.
+- Added `scripts/compare_ai_advisory_models.py` so Claude Sonnet vs Opus advisory outputs can be compared from the same packet.
 - Generated `data/ai_advisory_packet_latest.json` for the current BTC context.
 
 **Decision**
 - AI can help drive attention, regime interpretation, playbook selection, and trade ideas for review.
 - AI cannot bypass `risk.py`, cannot alter leverage/size/stops directly, and cannot execute orders.
+- When testing Claude, try Sonnet first and compare against Opus; judge guardrail-clean evidence quality, not model prestige.
 
 ---
 

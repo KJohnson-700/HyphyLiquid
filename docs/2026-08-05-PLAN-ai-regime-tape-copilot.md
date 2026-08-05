@@ -74,3 +74,17 @@ The constraint is that AI advice must be replayable and auditable. If it cannot 
 ## Next Build Step
 
 Wire a daily/news context writer into the packet's `news` field, then run a cheap model such as MiniMax/Marvis over the packet to produce advisory JSON. Codex reviews the advisory output and only promotes stable patterns into deterministic code after paper validation.
+
+## Claude Model Bake-Off
+
+When Claude is used for advisory review, test **Sonnet first**. Slim read that Sonnet performs well with trading-style reasoning, so treat it as the first candidate rather than defaulting to Opus.
+
+Comparison protocol:
+
+- Run the same `data/ai_advisory_packet_latest.json` through Sonnet and Opus.
+- Require each model to return the same advisory JSON schema with `model_id`.
+- Validate both through `scripts/run_ai_advisory_packet.py --response-json <file>`.
+- Compare them with `scripts/compare_ai_advisory_models.py`.
+- Log whether Sonnet or Opus gave the cleaner, more usable advisory output.
+
+Important: compare advisory quality first, not confidence theater. A good output is specific, evidence-backed, guardrail-clean, and willing to say `stand_down` when the setup is marginal.

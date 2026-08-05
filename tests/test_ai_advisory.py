@@ -21,6 +21,7 @@ class TestAIAdvisory(unittest.TestCase):
             packet,
             {
                 "symbol": "BTC",
+                "model_id": "claude-sonnet",
                 "action": "watch_playbook",
                 "playbook": "btc_b_failed_reclaim_ask_heavy",
                 "confidence": 0.82,
@@ -30,6 +31,7 @@ class TestAIAdvisory(unittest.TestCase):
         )
 
         self.assertTrue(decision.allowed_for_execution)
+        self.assertEqual(decision.model_id, "claude-sonnet")
         self.assertEqual(decision.action, "watch_playbook")
         self.assertEqual(decision.warnings, ())
 
