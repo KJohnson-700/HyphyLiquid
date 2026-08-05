@@ -31,6 +31,12 @@ Per Slim's 2026-08-05 spec. Research-only watch tracking SOL H1 across rebuild c
 
 ---
 
+## 2026-08-05 - Clarify SOL H1 fixed calm threshold wording
+
+Codex cleaned stale wording in `scripts/run_relative_value_dislocation.py` so the generated H1 explanation says fixed calm thresholds, not the old run-median rule. No strategy behavior changed.
+
+---
+
 ## 2026-08-05 - Relative-value / dislocation backtest (research only)
 
 Per Slim's 2026-08-05 spec. Research-only. No execution, no order_manager, no risk.py, no live/paper routing touched.

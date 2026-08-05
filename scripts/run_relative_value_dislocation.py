@@ -533,8 +533,8 @@ def compute_per_event_records(
     rec["eth_vol_30m"] = eth_vol_30m if eth_vol_30m is not None else 0.0
 
     # Per-event confirm flags (depend on fixed threshold, so we can compute
-    # these here; the "calm" flags depend on the run median and are added
-    # later by _attach_regime_flags).
+    # these here; the "calm" flags depend on the fixed or CLI-supplied
+    # threshold and are added later by _attach_regime_flags).
     threshold_pct = _confirm_threshold_pct()
     for h in horizons:
         alt_r = rec.get(f"raw_return_{h}m", 0.0)
@@ -997,7 +997,7 @@ def _write_summary_md(
     lines.append("## How to read")
     lines.append("")
     lines.append("- `generic` = all events, no filter (control).")
-    lines.append("- `H1_btc_eth_calm` = only fade when BTC AND ETH realized vol is below the run median.")
+    lines.append("- `H1_btc_eth_calm` = only fade when BTC AND ETH realized vol is below the fixed calm thresholds.")
     lines.append("- `H2_btc_eth_dont_confirm` = only fade when neither ref moved in the same direction as the alt cascade beyond the confirm threshold.")
     lines.append("- `H3_isolated` = only fade when no BTC/ETH cascade happened in the prior 30m (i.e. the alt move was alt-specific, not dragged by majors).")
     lines.append("- Returns are in **percent units** (e.g. `+0.32` means `+0.32%`).")
