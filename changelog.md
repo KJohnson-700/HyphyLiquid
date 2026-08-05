@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-08-05 - Add AI advisory guardrail contract
+
+Codex added the first safe integration point for AI-assisted regime/tape review.
+
+**What changed**
+- Added `src/strategy/ai_advisory.py` with a fail-closed advisory contract.
+- Added `scripts/run_ai_advisory_packet.py` to build bounded context packets from current diagnostics for an AI co-pilot.
+- Added tests proving AI advice cannot place orders, cannot promote research symbols into execution, and must include regime/tape/risk evidence before becoming execution-eligible.
+- Generated `data/ai_advisory_packet_latest.json` for the current BTC context.
+
+**Decision**
+- AI can help drive attention, regime interpretation, playbook selection, and trade ideas for review.
+- AI cannot bypass `risk.py`, cannot alter leverage/size/stops directly, and cannot execute orders.
+
+---
+
 ## 2026-08-05 - Add paper simulation audit report
 
 Codex added a ledger-based paper audit so the live-like paper lane can be debugged from explainable decisions and fills.
