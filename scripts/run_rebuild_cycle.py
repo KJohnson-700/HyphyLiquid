@@ -18,11 +18,13 @@ Wraps the thirteen scripts Slim specified:
   scripts/run_regime_summary.py          (post-pipeline evidence collector per
                                           docs/2026-08-03-HANDOFF-regime-map.md)
   scripts/paper_decision_loop.py         --once --max-new 500
+  scripts/run_paper_audit.py             (paper ledger trust report)
 
 The first two are the v1 main pipeline and must both succeed before the
 baseline is updated. The subsequent runs (two lane sweeps + two
 focused side-filtered + three TP/SL sweeps + one trailing sweep + one
-filter diagnostic + one regime summary + one live-like paper update)
+filter diagnostic + one regime summary + one live-like paper update + one
+paper audit)
 are best-effort reporting;
 their failures are logged but do NOT block the baseline update.
 
@@ -129,6 +131,7 @@ TRAILING_BTC_B_CMD = [
 FILTER_DIAGNOSTICS_CMD = [PYTHON, "scripts/run_filter_diagnostics.py", "--min-n", "20", "--top", "30"]
 REGIME_SUMMARY_CMD = [PYTHON, "scripts/run_regime_summary.py"]
 PAPER_DECISION_CMD = [PYTHON, "scripts/paper_decision_loop.py", "--once", "--max-new", "500"]
+PAPER_AUDIT_CMD = [PYTHON, "scripts/run_paper_audit.py"]
 ALL_CMDS = [
     BUILD_CMD,
     BACKTEST_CMD,
@@ -143,6 +146,7 @@ ALL_CMDS = [
     FILTER_DIAGNOSTICS_CMD,
     REGIME_SUMMARY_CMD,
     PAPER_DECISION_CMD,
+    PAPER_AUDIT_CMD,
 ]
 
 # Threshold alerts (per Slim's operating rules, 2026-08-03)
@@ -491,6 +495,14 @@ def main() -> int:
             print(f"  WARNING: paper decision loop exited {rc_pd}; baseline will still update.")
         else:
             print("  paper decision loop ok.")
+
+        # --- Paper audit report (best-effort, no exchange calls) ---
+        rc_pa = _run(PAPER_AUDIT_CMD)
+        if rc_pa != 0:
+            lane_failures.append((" ".join(PAPER_AUDIT_CMD[1:]), rc_pa))
+            print(f"  WARNING: paper audit exited {rc_pa}; baseline will still update.")
+        else:
+            print("  paper audit ok.")
 
     print("\n>>> Main pipeline succeeded. Updating baseline.")
     payload = update_baseline()

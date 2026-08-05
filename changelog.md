@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-08-05 - Add paper simulation audit report
+
+Codex added a ledger-based paper audit so the live-like paper lane can be debugged from explainable decisions and fills.
+
+**What changed**
+- Added `scripts/run_paper_audit.py` to summarize paper decisions, opened positions, closed fills, exit reasons, PnL/R, recent opens, current anomalies, and legacy pre-gate warnings.
+- Wired the audit into `scripts/run_rebuild_cycle.py` after the paper decision loop so every rebuild refreshes `data/paper_audit_latest.json` and `data/paper_audit_latest.md`.
+- Fixed a broker edge case where a recovered position whose entry candle was not available could fail instead of staying safely open/unmarked.
+- Added focused tests for the audit report and the missing-entry-candle broker path.
+
+---
+
 ## 2026-08-04 - Add BTC/ETH filter diagnostics
 
 Codex added the first deterministic filter readout for the BTC/ETH v1 lane.

@@ -126,21 +126,20 @@ def mark_position(position: PaperPosition, candles: Iterable[dict]) -> PaperFill
     slippage haircut; target and trailing exits pay only configured costs.
     """
     ordered = list(candles)
-    if position.entry_idx >= len(ordered):
-        return _open_fill(position, 0.0, 0.0, None, None, None, None)
-
     bracket = position.bracket
     direction = position.direction
     entry = position.entry_price
     risk_pct = abs(_return_pct(direction, entry, bracket.initial_stop_price))
+    trailing_stop = bracket.initial_stop_price
     last_idx = min(position.entry_idx + bracket.max_hold_minutes, len(ordered) - 1)
+    if position.entry_idx >= len(ordered):
+        return _open_fill(position, 0.0, 0.0, trailing_stop, None, None, None)
     if last_idx <= position.entry_idx:
         mark_price = _float_from_bar(ordered[position.entry_idx], "c")
         return _open_fill(position, 0.0, 0.0, trailing_stop, mark_price, ordered[position.entry_idx], position.entry_idx)
 
     active_trail = False
     best_price = entry
-    trailing_stop = bracket.initial_stop_price
     mae_pct = 0.0
     mfe_pct = 0.0
 
