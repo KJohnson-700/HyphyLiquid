@@ -18,9 +18,12 @@ Codex added a bounded grid-style research backtest for assets that are weak unde
 - HYPE side=B wide bucket: n=5, PF 5.03, median +0.1535%, sample too small.
 - HYPE normal bucket remains weak: n=15, PF 1.17, median -0.1057%.
 - DOGE/SOL/BNB/xyz:GOLD/xyz:SILVER are still too small or negative for action.
+- Added `scripts/run_grid_sweep.py` for focused parameter sweeps.
+- Focused HYPE side=B wide sweep best row: n=7, PF 2.01, avg +0.0770%, median -0.0529%, top_win_share 53.3%, watch_pass=False.
 
 **Decision**
 - Treat grid as research-only. It may help HYPE in wide range regimes, but the median problem and tiny wide-bucket sample mean no paper/live promotion yet.
+- Run focused grid sweeps only for now; broad sweeps are slower and not justified until the pocket improves.
 
 ---
 

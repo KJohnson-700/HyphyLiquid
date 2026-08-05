@@ -69,3 +69,34 @@ Promotion bar should be stricter than the first read:
 - median net return > 0
 - top-win concentration acceptable
 - no evidence that losses are caused by stop clustering during true continuation
+
+## Focused HYPE B-Side Sweep
+
+Codex added `scripts/run_grid_sweep.py` and ran a narrowed first pass on the highest-signal pocket:
+
+`HYPE + side=B + band_width=wide`
+
+Sweep space:
+
+- spacing: 5, 10, 15, 25 bps
+- max levels: 1, 2, 3
+- stop buffer: 5, 10, 20 bps
+- hold: 30, 60, 120 minutes
+- min_n watch threshold for this tiny first pass: 5
+
+Best row by PF:
+
+- buckets: `wide`
+- spacing: 10 bps
+- max levels: 3
+- stop buffer: 20 bps
+- hold: 30 minutes
+- n=7
+- WR=42.9%
+- avg +0.0770%
+- median -0.0529%
+- PF 2.01
+- top_win_share 53.3%
+- watch_pass=False
+
+Decision: the focused grid sweep did **not** pass. PF improved, but median stayed negative and the best row was outlier-heavy. Keep HYPE grid as research/watch only until the sample grows and a sweep row clears median > 0 with acceptable top-win concentration.
