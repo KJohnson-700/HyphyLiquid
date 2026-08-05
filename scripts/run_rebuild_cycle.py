@@ -1,6 +1,6 @@
 """Run the cascade-rebuild + backtest cycle and update the baseline.
 
-Wraps the thirteen scripts Slim specified:
+Wraps the fourteen scripts Slim specified:
   scripts/build_cascades.py              --time-window 60 --max-snapshot-lag 120
   scripts/run_fade_or_follow_backtest.py --horizon 15 --wait 3 --max-entry-lag 2
   scripts/run_lane_backtest.py           --lane btc_eth_fade_or_follow
@@ -19,6 +19,8 @@ Wraps the thirteen scripts Slim specified:
                                           docs/2026-08-03-HANDOFF-regime-map.md)
   scripts/paper_decision_loop.py         --once --max-new 500
   scripts/run_paper_audit.py             (paper ledger trust report)
+  scripts/check_sol_h1_watch.py          (SOL H1 strict-decision-rule watch,
+                                          research-only; per Slim 2026-08-05)
 
 The first two are the v1 main pipeline and must both succeed before the
 baseline is updated. The subsequent runs (two lane sweeps + two
@@ -132,6 +134,7 @@ FILTER_DIAGNOSTICS_CMD = [PYTHON, "scripts/run_filter_diagnostics.py", "--min-n"
 REGIME_SUMMARY_CMD = [PYTHON, "scripts/run_regime_summary.py"]
 PAPER_DECISION_CMD = [PYTHON, "scripts/paper_decision_loop.py", "--once", "--max-new", "500"]
 PAPER_AUDIT_CMD = [PYTHON, "scripts/run_paper_audit.py"]
+SOL_H1_WATCH_CMD = [PYTHON, "scripts/check_sol_h1_watch.py"]
 ALL_CMDS = [
     BUILD_CMD,
     BACKTEST_CMD,
@@ -147,6 +150,7 @@ ALL_CMDS = [
     REGIME_SUMMARY_CMD,
     PAPER_DECISION_CMD,
     PAPER_AUDIT_CMD,
+    SOL_H1_WATCH_CMD,
 ]
 
 # Threshold alerts (per Slim's operating rules, 2026-08-03)
@@ -503,6 +507,14 @@ def main() -> int:
             print(f"  WARNING: paper audit exited {rc_pa}; baseline will still update.")
         else:
             print("  paper audit ok.")
+
+        # --- SOL H1 research watch (best-effort, research-only) ---
+        rc_shw = _run(SOL_H1_WATCH_CMD)
+        if rc_shw != 0:
+            lane_failures.append((" ".join(SOL_H1_WATCH_CMD[1:]), rc_shw))
+            print(f"  WARNING: SOL H1 watch exited {rc_shw}; baseline will still update.")
+        else:
+            print("  SOL H1 watch ok.")
 
     print("\n>>> Main pipeline succeeded. Updating baseline.")
     payload = update_baseline()

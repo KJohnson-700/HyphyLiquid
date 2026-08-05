@@ -76,9 +76,18 @@ OI_DIRECTION_THRESHOLD_PCT: float = 0.01  # 1%
 CONFIRM_MIN_RETURN_PCT: float = 0.05  # 0.05%
 
 # Calm threshold: realized vol (1m returns) below this fraction counts as calm.
-# We compute it dynamically per run as the median across events (so the bucket
-# is relative to the current sample). This is the floor.
-CALM_VOL_THRESHOLD: float = 1e-6  # 1 bp / minute stdev = essentially flat
+# Per Slim's 2026-08-05 strict decision rule, the threshold is FIXED (not a
+# run-median) so cycle-to-cycle SOL H1 verdicts are comparable. Values are
+# 1m-return stdev over a 30m window. 0.0005 = 5 bps / minute, which is
+# "calm-but-not-flat" for BTC; 0.0008 is slightly looser for ETH which
+# has more baseline noise.
+FIXED_CALM_VOL_BTC_30M: float = 0.0005  # 5 bps / minute stdev
+FIXED_CALM_VOL_ETH_30M: float = 0.0008  # 8 bps / minute stdev
+
+# Default-true flag: if True, use FIXED_* above. CLI can override to True
+# with explicit --calm-vol-btc / --calm-vol-eth (which then turns this off
+# and uses the explicit values).
+USE_FIXED_CALM_THRESHOLD: bool = True
 
 # Promotion gate.
 PROMOTION_N: int = 30
@@ -564,33 +573,44 @@ def compute_per_event_records(
     return rec
 
 
-def _calm_vol_threshold(events: list[dict]) -> tuple[float, float]:
-    """Compute (btc_med, eth_med) for the calm/trending bucket threshold.
+def _calm_vol_threshold(
+    events: list[dict],
+    override_btc: float | None = None,
+    override_eth: float | None = None,
+) -> tuple[float, float]:
+    """Return (btc_threshold, eth_threshold) for the calm/trending bucket.
 
-    Uses the median of realized vol across the events. If a sample is too
-    small (< 5 events) fall back to the absolute CALM_VOL_THRESHOLD.
+    Per Slim's 2026-08-05 strict decision rule, the default is FIXED
+    (FIXED_CALM_VOL_BTC_30M / FIXED_CALM_VOL_ETH_30M) so cycle-to-cycle
+    verdicts are comparable. The events list is kept as a parameter for
+    forward compatibility (e.g. dynamic-threshold experiments via
+    --calm-vol-btc / --calm-vol-eth), but the default ignores it.
     """
-    btc = [e["btc_vol_30m"] for e in events if e.get("btc_vol_30m") is not None]
-    eth = [e["eth_vol_30m"] for e in events if e.get("eth_vol_30m") is not None]
-    btc_med = statistics.median(btc) if len(btc) >= 5 else CALM_VOL_THRESHOLD
-    eth_med = statistics.median(eth) if len(eth) >= 5 else CALM_VOL_THRESHOLD
-    return btc_med, eth_med
+    if override_btc is None:
+        btc_thr = FIXED_CALM_VOL_BTC_30M
+    else:
+        btc_thr = override_btc
+    if override_eth is None:
+        eth_thr = FIXED_CALM_VOL_ETH_30M
+    else:
+        eth_thr = override_eth
+    return btc_thr, eth_thr
 
 
 def _attach_regime_flags(
-    events: list[dict], btc_med: float, eth_med: float
+    events: list[dict], btc_thr: float, eth_thr: float
 ) -> list[dict]:
     """Mutate each event dict in place, adding the calm flags.
 
     The per-event confirm flags (btc_confirms_alt, eth_confirms_alt,
     confirms_neither, confirms_either) are set in
     compute_per_event_records because they depend only on the fixed
-    threshold. This function only attaches the calm flags, which depend
-    on the run-wide median.
+    threshold. This function only attaches the calm flags, using the
+    provided fixed thresholds.
     """
     for ev in events:
-        ev["btc_calm"] = ev["btc_vol_30m"] <= max(btc_med, CALM_VOL_THRESHOLD)
-        ev["eth_calm"] = ev["eth_vol_30m"] <= max(eth_med, CALM_VOL_THRESHOLD)
+        ev["btc_calm"] = ev["btc_vol_30m"] <= btc_thr
+        ev["eth_calm"] = ev["eth_vol_30m"] <= eth_thr
         ev["calm_both"] = ev["btc_calm"] and ev["eth_calm"]
     return events
 
@@ -730,6 +750,25 @@ def main() -> int:
         default=",".join(ALT_SYMBOLS),
         help=f"Comma-separated alt symbols to evaluate (default {','.join(ALT_SYMBOLS)})",
     )
+    parser.add_argument(
+        "--calm-vol-btc",
+        type=float,
+        default=None,
+        help=(
+            f"Override BTC calm-vol threshold (1m-return stdev over 30m). "
+            f"Default: fixed {FIXED_CALM_VOL_BTC_30M} = "
+            f"{FIXED_CALM_VOL_BTC_30M*1e4:.1f} bps / minute"
+        ),
+    )
+    parser.add_argument(
+        "--calm-vol-eth",
+        type=float,
+        default=None,
+        help=(
+            f"Override ETH calm-vol threshold. Default: fixed {FIXED_CALM_VOL_ETH_30M} = "
+            f"{FIXED_CALM_VOL_ETH_30M*1e4:.1f} bps / minute"
+        ),
+    )
     args = parser.parse_args()
 
     horizons = tuple(int(x) for x in args.horizons.split(","))
@@ -747,6 +786,16 @@ def main() -> int:
     print(f"  Funding band:    +/-{FUNDING_NEUTRAL_BAND} (neutral inside)")
     print(f"  OI threshold:    +/-{OI_DIRECTION_THRESHOLD_PCT:.0%}")
     print(f"  Confirm min ret: +/-{CONFIRM_MIN_RETURN_PCT:.2f}%")
+    print(
+        f"  Calm vol (BTC):  {FIXED_CALM_VOL_BTC_30M} ({FIXED_CALM_VOL_BTC_30M*1e4:.1f} bps/min stdev)"
+        if args.calm_vol_btc is None
+        else f"  Calm vol (BTC):  {args.calm_vol_btc} (OVERRIDE)"
+    )
+    print(
+        f"  Calm vol (ETH):  {FIXED_CALM_VOL_ETH_30M} ({FIXED_CALM_VOL_ETH_30M*1e4:.1f} bps/min stdev)"
+        if args.calm_vol_eth is None
+        else f"  Calm vol (ETH):  {args.calm_vol_eth} (OVERRIDE)"
+    )
     print()
 
     all_cascades = _load_cascades()
@@ -792,10 +841,10 @@ def main() -> int:
         print("No events to evaluate. Exiting.")
         return 1
 
-    btc_med, eth_med = _calm_vol_threshold(events)
-    print(f"  BTC vol-30m median: {btc_med:.6f}")
-    print(f"  ETH vol-30m median: {eth_med:.6f}")
-    events = _attach_regime_flags(events, btc_med, eth_med)
+    btc_thr, eth_thr = _calm_vol_threshold(events, args.calm_vol_btc, args.calm_vol_eth)
+    print(f"  BTC calm-vol threshold: {btc_thr:.6f} ({btc_thr*1e4:.1f} bps/min stdev)")
+    print(f"  ETH calm-vol threshold: {eth_thr:.6f} ({eth_thr*1e4:.1f} bps/min stdev)")
+    events = _attach_regime_flags(events, btc_thr, eth_thr)
     events = _attach_isolation_flag(events, all_cascades)
 
     # Build per-symbol, per-horizon, per-playbook verdicts.
@@ -854,14 +903,16 @@ def main() -> int:
                     "PROMOTION_N": PROMOTION_N,
                     "PROMOTION_PF": PROMOTION_PF,
                     "PROMOTION_TOP_WIN_SHARE": PROMOTION_TOP_WIN_SHARE,
+                    "FIXED_CALM_VOL_BTC_30M": FIXED_CALM_VOL_BTC_30M,
+                    "FIXED_CALM_VOL_ETH_30M": FIXED_CALM_VOL_ETH_30M,
                 },
                 "totals": {
                     "alt_cascades": len(alt_cascades),
                     "events_evaluated": len(events),
                     "skipped_no_candles": skipped_no_candles,
                     "skipped_no_entry": skipped_no_entry,
-                    "btc_vol_30m_median": btc_med,
-                    "eth_vol_30m_median": eth_med,
+                    "btc_calm_vol_threshold": btc_thr,
+                    "eth_calm_vol_threshold": eth_thr,
                 },
                 "verdicts": results,
             },
@@ -873,7 +924,7 @@ def main() -> int:
 
     # Write Markdown summary
     _write_summary_md(results, events, symbols, horizons, skipped_no_candles,
-                      skipped_no_entry, btc_med, eth_med)
+                      skipped_no_entry, btc_thr, eth_thr)
     print(f"Wrote MD:   {SUMMARY_MD_PATH.name}")
     print()
     print("DONE. No execution touched. Outputs are research-only.")
@@ -887,8 +938,8 @@ def _write_summary_md(
     horizons: tuple[int, ...],
     skipped_no_candles: int,
     skipped_no_entry: int,
-    btc_med: float,
-    eth_med: float,
+    btc_thr: float,
+    eth_thr: float,
 ) -> None:
     lines: list[str] = []
     lines.append("# Relative-Value / Dislocation Backtest — Summary")
@@ -934,8 +985,8 @@ def _write_summary_md(
     lines.append(f"- Total alt cascades seen: {sum(1 for e in events)} events (after candle/entry filters)")
     lines.append(f"- Skipped (no candle data for symbol): {skipped_no_candles}")
     lines.append(f"- Skipped (no eligible entry / no exit bar): {skipped_no_entry}")
-    lines.append(f"- BTC vol-30m median (calm threshold): {btc_med:.6f}")
-    lines.append(f"- ETH vol-30m median (calm threshold): {eth_med:.6f}")
+    lines.append(f"- BTC calm-vol threshold (fixed): {btc_thr:.6f} ({btc_thr*1e4:.1f} bps/min stdev)")
+    lines.append(f"- ETH calm-vol threshold (fixed): {eth_thr:.6f} ({eth_thr*1e4:.1f} bps/min stdev)")
     lines.append("")
     lines.append("## Symbols evaluated")
     lines.append("")

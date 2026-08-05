@@ -4,6 +4,33 @@
 
 ---
 
+## 2026-08-05 - SOL H1 strict-decision-rule watch (research only)
+
+Per Slim's 2026-08-05 spec. Research-only watch tracking SOL H1 across rebuild cycles with a fixed calm definition, repeated-confirmation rule, and paper-sim requirement before any scope discussion. Zero execution wiring.
+
+**What changed**
+- Refactored `scripts/run_relative_value_dislocation.py`:
+  - Added `FIXED_CALM_VOL_BTC_30M = 0.0005` (5 bps/min stdev) and `FIXED_CALM_VOL_ETH_30M = 0.0008` (8 bps/min stdev) constants.
+  - `_calm_vol_threshold()` now returns the fixed values; `--calm-vol-btc` / `--calm-vol-eth` CLI flags allow override for exploration.
+  - JSON output adds `btc_calm_vol_threshold` / `eth_calm_vol_threshold` (replacing the prior `btc_vol_30m_median` / `eth_vol_30m_median`).
+  - Test count: 47 (was 45; added two fixed-threshold tests).
+- Added `scripts/check_sol_h1_watch.py` (SOL H1 watch, BTC/HYPE observation, paper sim status, watch log append).
+- Added `tests/test_check_sol_h1_watch.py` — 22/22 tests passing.
+- Wired `check_sol_h1_watch.py` into `scripts/run_rebuild_cycle.py` as the 14th command (best-effort, never blocks baseline).
+
+**Decision rule (per Slim, strict)**
+- 2 consecutive cycles where BOTH 30m and 60m SOL H1 verdicts pass the standard promotion gate (n>=30, PF>1.5, med>0, top_win_share<=35%)
+- AND >= 5 paper decisions tagged with the SOL H1 setup
+- Until paper sim is H1-aware, watch status is `watch-pending-paper` (not `watch-confirmed`)
+
+**First read**
+- SOL H1 30m: n=117, PF 1.10, med +0.0014% (fails PF<=1.5 with the fixed 5 bps BTC / 8 bps ETH threshold; was PF 1.60 with the run-median 0.000394)
+- SOL H1 60m: n=117, PF 1.19, med +0.0068% (was 1.64)
+- The signal is sensitive to the threshold. The fixed 5/8 bps may be too loose; run-median was tighter. Slim's call on which is the right number.
+- Watch status: `watch-pending`. BTC: n=528, PF 0.76. HYPE: n=22, PF 0.82.
+
+---
+
 ## 2026-08-05 - Relative-value / dislocation backtest (research only)
 
 Per Slim's 2026-08-05 spec. Research-only. No execution, no order_manager, no risk.py, no live/paper routing touched.

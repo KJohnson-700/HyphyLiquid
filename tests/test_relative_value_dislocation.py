@@ -20,12 +20,14 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.run_relative_value_dislocation import (  # noqa: E402
     BETA_WINDOW_MIN,
-    CALM_VOL_THRESHOLD,
     CONFIRM_MIN_RETURN_PCT,
+    FIXED_CALM_VOL_BTC_30M,
+    FIXED_CALM_VOL_ETH_30M,
     FUNDING_NEUTRAL_BAND,
     OI_DIRECTION_THRESHOLD_PCT,
     PromotionVerdict,
     _beta,
+    _calm_vol_threshold,
     _confirm_threshold_pct,
     _deviation_from_beta,
     _fade_pnl,
@@ -442,9 +444,23 @@ def test_promotion_gate_empty_bucket():
 
 def test_constants_are_sane():
     assert BETA_WINDOW_MIN > 0
-    assert CALM_VOL_THRESHOLD > 0
+    assert FIXED_CALM_VOL_BTC_30M > 0
+    assert FIXED_CALM_VOL_ETH_30M > 0
     assert CONFIRM_MIN_RETURN_PCT > 0
     assert OI_DIRECTION_THRESHOLD_PCT > 0
+
+
+def test_calm_vol_threshold_default_fixed():
+    # Default: returns the fixed constants (5 / 8 bps per minute stdev)
+    btc_thr, eth_thr = _calm_vol_threshold([])
+    assert btc_thr == FIXED_CALM_VOL_BTC_30M
+    assert eth_thr == FIXED_CALM_VOL_ETH_30M
+
+
+def test_calm_vol_threshold_override():
+    btc_thr, eth_thr = _calm_vol_threshold([], override_btc=0.002, override_eth=0.003)
+    assert btc_thr == 0.002
+    assert eth_thr == 0.003
 
 
 def test_promotion_verdict_dataclass():
