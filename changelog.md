@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-08-05 - Relative-value / dislocation backtest (research only)
+
+Per Slim's 2026-08-05 spec. Research-only. No execution, no order_manager, no risk.py, no live/paper routing touched.
+
+**What changed**
+- Added `scripts/run_relative_value_dislocation.py` — per-event BTC/ETH-relative value backtest with rolling beta, deviation, funding/OI context, calm/confirm/isolation playbooks.
+- Added `tests/test_relative_value_dislocation.py` — 45/45 tests passing. Covers forward-return math, fade direction, rolling beta, realized vol, deviation, funding/OI buckets, top_win_share, confirm logic, and all four promotion-gate failure modes.
+- Outputs `data/relative_value_dislocation_results.json` (38KB) and `data/relative_value_dislocation_summary.md` (10KB).
+
+**Per-symbol first read (481 events evaluated, 484 cascades total)**
+- SOL generic: PF 0.81-1.33 across horizons (continues decay).
+- SOL H1 (BTC/ETH calm): **PASS at 30m (n=62, PF 1.60) and 60m (n=62, PF 1.64)**.
+- DOGE/BNB: n<30, no signal.
+- xyz:SILVER: generic 5m PF 1.38 (n=173) is closest to threshold.
+- xyz:GOLD: fails everywhere under BTC/ETH context — prior simple-fade PF 1.90 likely contaminated by majors.
+- H3 isolated only fires for xyz:SILVER (n=3, too small).
+
+**Verdict**
+- SOL H1 is a new filter result (not a rehash of the simple rule). Re-run at next cycle; if it re-passes at n>=80, it becomes a candidate for Slim's filter conversation.
+- No promotion of any alt symbol. v1 stays BTC/ETH-only.
+- No execution wiring changes. This is data-layer work only.
+
+---
+
 ## 2026-08-05 - Add research-only event range grid lane
 
 Codex added a bounded grid-style research backtest for assets that are weak under the current cascade lanes.
