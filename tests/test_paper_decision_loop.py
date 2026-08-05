@@ -74,6 +74,46 @@ class TestPaperBroker(unittest.TestCase):
         self.assertGreater(fill.exit_price, 100.5)
         self.assertLess(fill.net_return_pct, -0.5)
 
+    def test_open_position_marks_unrealized_pnl(self):
+        candles = [
+            _bar(_ms("2026-08-04T00:00:00+00:00"), 100),
+            _bar(_ms("2026-08-04T00:01:00+00:00"), 100.5, h=100.6, l=100.2),
+            _bar(_ms("2026-08-04T00:02:00+00:00"), 101.0, h=101.1, l=100.7),
+        ]
+        position = PaperPosition(
+            paper_id="paper-open",
+            paper_scope="v1_paper",
+            cascade_key="k",
+            symbol="BTC",
+            side="B",
+            lane="btc_eth_trailing_resolution",
+            direction="long",
+            event_ts="2026-08-04T00:00:00+00:00",
+            entry_ts="2026-08-04T00:00:00+00:00",
+            entry_idx=0,
+            entry_price=100,
+            notional_usd=1000,
+            risk_usd=5,
+            bracket=PaperBracket(
+                entry_price=100,
+                initial_stop_price=99,
+                target_price=None,
+                activation_price=105,
+                trail_bps=10,
+                max_hold_minutes=5,
+                stop_slippage_bps=2,
+                round_trip_cost_bps=8,
+            ),
+            metadata={},
+        )
+
+        fill = mark_position(position, candles)
+
+        self.assertEqual(fill.status, "open")
+        self.assertEqual(fill.exit_price, 101.0)
+        self.assertEqual(fill.bars_held, 2)
+        self.assertGreater(fill.net_return_pct, 0.9)
+
 
 class TestPaperDecisionLoop(unittest.TestCase):
     def test_script_does_not_import_live_exchange_boundary(self):
@@ -185,6 +225,40 @@ class TestPaperDecisionLoop(unittest.TestCase):
             decision_rows = [json.loads(line) for line in decisions[0].read_text(encoding="utf-8").splitlines()]
             self.assertEqual(decision_rows[0]["decision"], "reject")
             self.assertIn("top_book_imbalance=ask_heavy", decision_rows[0]["reason"])
+
+    def test_run_once_processes_oldest_unprocessed_paper_candidates_not_tail_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            state_path = data_dir / ".paper_decision_state.json"
+            btc_base = _ms("2026-08-04T00:00:00+00:00")
+            btc_candles = [_bar(btc_base + i * 60_000, 100 + i * 0.2) for i in range(40)]
+            _write_jsonl(data_dir / "ws_candle" / "btc_2026-08-04.jsonl", [{"payload": c} for c in btc_candles])
+
+            cascades = []
+            for i in range(8):
+                cascades.append(
+                    {
+                        "symbol": "BTC" if i in {0, 1, 2} else "SOL",
+                        "side": "B",
+                        "start_ts": f"2026-08-04T00:{20 + i:02d}:30+00:00",
+                        "event_vwap": 104.0,
+                        "n_fills": 12 + i,
+                        "total_notional": 500000 + i,
+                        "top_book_imbalance": 0.1,
+                    }
+                )
+            _write_jsonl(data_dir / "cascades.jsonl", cascades)
+
+            first = run_once(data_dir=data_dir, state_path=state_path, max_new=1)
+            second = run_once(data_dir=data_dir, state_path=state_path, max_new=1)
+
+            self.assertEqual(first["decisions_written"], 1)
+            self.assertEqual(second["decisions_written"], 1)
+            decisions = list(data_dir.glob("paper_decisions_*.jsonl"))
+            rows = [json.loads(line) for line in decisions[0].read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(rows), 2)
+            self.assertIn("00:20:30", rows[0]["cascade_key"])
+            self.assertIn("00:21:30", rows[1]["cascade_key"])
 
 
 if __name__ == "__main__":

@@ -60,6 +60,16 @@ Codex should implement a paper-only gate candidate for:
 
 Implemented in the live-like paper loop after the first diagnostic read. BTC paper positions now require the filtered `ask_heavy` top-book bucket before opening. This remains paper-only and does not change the `OrderManager` execution allowlist.
 
+## Paper Accuracy Fix
+
+Codex tightened the paper simulator on 2026-08-04 after reviewing live drift risks:
+
+- Fixed `scripts/paper_decision_loop.py` so `max_new` no longer means "only inspect the last N cascades." The loop now selects the oldest unprocessed BTC/HYPE candidates first. This matters on heavy market days where more than `max_new` cascades can arrive between runs.
+- Updated `src/execution/paper_broker.py` so open marks report unrealized P&L using the latest completed candle. Before this, open positions showed `0.0%` until close, which made status less accurate.
+- Added regression tests for both behaviors.
+
+After the fix, one catch-up pass wrote 137 decisions and opened/closed 1 filtered BTC paper position. Treat paper counts before this fix as possibly undercounted during high-volume windows.
+
 Recommended guardrails before live:
 
 - paper-only first

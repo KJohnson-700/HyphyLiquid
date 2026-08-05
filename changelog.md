@@ -13,6 +13,8 @@ Codex added the first deterministic filter readout for the BTC/ETH v1 lane.
 - Added `scripts/run_filter_diagnostics.py` to rank feature buckets by win rate, average/median return, PF, and outlier concentration.
 - Wired the filter diagnostic into `scripts/run_rebuild_cycle.py` as a best-effort post-trailing step so each rebuild produces `data/btc_eth_filter_diagnostics.json`.
 - Tightened the live-like BTC paper lane to only open the filtered BTC B-side failed-reclaim continuation candidate when the event top book is `ask_heavy`.
+- Fixed paper-loop backlog scanning so heavy markets do not skip older unprocessed BTC/HYPE paper candidates when more than `max_new` cascades arrive between passes.
+- Updated open paper marks to report unrealized P&L from the latest completed candle instead of always showing `0.0%` until close.
 - Added focused unit tests for spread, imbalance, funding, size, staleness, enrichment, and min-sample behavior.
 
 ---

@@ -515,7 +515,12 @@ def run_once(*, data_dir: Path = DATA_DIR, state_path: Path = STATE_PATH, max_ne
             open_positions.pop(position.paper_id, None)
             positions_closed += 1
 
-    new_cascades = [c for c in cascades[-max_new:] if _cascade_key(c) not in processed]
+    paper_cascades = [
+        c for c in cascades
+        if str(c.get("symbol", "")).upper() in PAPER_SYMBOLS
+        and _cascade_key(c) not in processed
+    ]
+    new_cascades = paper_cascades[:max_new]
     new_cascades.sort(key=lambda c: _cascade_ts_ms(c) or 0)
     for cascade in new_cascades:
         mark_open_positions(_cascade_ts_ms(cascade))

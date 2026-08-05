@@ -127,7 +127,7 @@ def mark_position(position: PaperPosition, candles: Iterable[dict]) -> PaperFill
     """
     ordered = list(candles)
     if position.entry_idx >= len(ordered):
-        return _open_fill(position, 0.0, 0.0, None)
+        return _open_fill(position, 0.0, 0.0, None, None, None, None)
 
     bracket = position.bracket
     direction = position.direction
@@ -135,7 +135,8 @@ def mark_position(position: PaperPosition, candles: Iterable[dict]) -> PaperFill
     risk_pct = abs(_return_pct(direction, entry, bracket.initial_stop_price))
     last_idx = min(position.entry_idx + bracket.max_hold_minutes, len(ordered) - 1)
     if last_idx <= position.entry_idx:
-        return _open_fill(position, 0.0, 0.0, None)
+        mark_price = _float_from_bar(ordered[position.entry_idx], "c")
+        return _open_fill(position, 0.0, 0.0, trailing_stop, mark_price, ordered[position.entry_idx], position.entry_idx)
 
     active_trail = False
     best_price = entry
@@ -190,10 +191,12 @@ def mark_position(position: PaperPosition, candles: Iterable[dict]) -> PaperFill
                 return _closed_fill(position, ordered, idx, "target", bracket.target_price, mae_pct, mfe_pct, trailing_stop)
 
     if len(ordered) - 1 < position.entry_idx + bracket.max_hold_minutes:
-        return _open_fill(position, mae_pct, mfe_pct, trailing_stop)
+        mark_price = _float_from_bar(ordered[-1], "c") if ordered else None
+        mark_bar = ordered[-1] if ordered else None
+        return _open_fill(position, mae_pct, mfe_pct, trailing_stop, mark_price, mark_bar, len(ordered) - 1)
     close = _float_from_bar(ordered[last_idx], "c")
     if close is None:
-        return _open_fill(position, mae_pct, mfe_pct, trailing_stop)
+        return _open_fill(position, mae_pct, mfe_pct, trailing_stop, None, None, last_idx)
     reason = "timeout_trailing_active" if active_trail else "timeout_no_activation"
     return _closed_fill(position, ordered, last_idx, reason, close, mae_pct, mfe_pct, trailing_stop)
 
@@ -203,20 +206,26 @@ def _open_fill(
     mae_pct: float,
     mfe_pct: float,
     trailing_stop: float | None,
+    mark_price: float | None,
+    mark_bar: dict | None,
+    mark_idx: int | None,
 ) -> PaperFill:
+    gross = _return_pct(position.direction, position.entry_price, mark_price) if mark_price is not None else 0.0
+    net = gross - (position.bracket.round_trip_cost_bps / 100.0) if mark_price is not None else 0.0
+    risk_pct = abs(_return_pct(position.direction, position.entry_price, position.bracket.initial_stop_price))
     return PaperFill(
         paper_id=position.paper_id,
         status="open",
-        exit_ts=None,
-        exit_price=None,
+        exit_ts=_ts_from_bar(mark_bar) if mark_bar is not None else None,
+        exit_price=round(mark_price, 8) if mark_price is not None else None,
         exit_reason=None,
-        gross_return_pct=0.0,
-        net_return_pct=0.0,
-        pnl_usd=0.0,
-        r_multiple=0.0,
+        gross_return_pct=round(gross, 4),
+        net_return_pct=round(net, 4),
+        pnl_usd=round(position.notional_usd * net / 100.0, 4),
+        r_multiple=round(net / risk_pct, 4) if risk_pct > 0 else 0.0,
         mae_pct=round(mae_pct, 4),
         mfe_pct=round(mfe_pct, 4),
-        bars_held=0,
+        bars_held=max(0, mark_idx - position.entry_idx) if mark_idx is not None else 0,
         final_trailing_stop=round(trailing_stop, 8) if trailing_stop is not None else None,
     )
 
