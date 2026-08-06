@@ -53,6 +53,20 @@ DEFAULT_ORDER_GROUPING = "normalTpsl"
 
 
 @dataclass
+class BracketOrderIntent:
+    """Execution-ready bracket intent from a deterministic signal lane."""
+
+    signal_ts: pd.Timestamp
+    symbol: str
+    side: str  # "long" or "short"
+    entry_px: float
+    sl_px: float
+    tp_px: Optional[float] = None
+    notional_usd: Optional[float] = None
+    reason: str = ""
+
+
+@dataclass
 class OrderResult:
     signal_ts: pd.Timestamp
     symbol: str
@@ -196,6 +210,299 @@ class OrderManager:
         except Exception as e:
             logger.exception("failed to cancel orphan entry order")
             return True, None, str(e)
+
+    def execute_bracket_intent(self, intent: BracketOrderIntent) -> OrderResult:
+        """Execute a precomputed bracket intent.
+
+        This is the live boundary for paper-to-live promotion. The strategy
+        lane owns entry, stop, target/trailing thesis, and notional proposal;
+        the order manager owns v1 symbol allowlist, tick/size rounding, risk,
+        and atomic bracket submission.
+        """
+        symbol = intent.symbol.upper()
+        side = intent.side.lower()
+        if symbol not in V1_TRADE_SYMBOLS:
+            return OrderResult(
+                signal_ts=intent.signal_ts,
+                symbol=symbol,
+                side=side,
+                requested_size_usd=0.0,
+                requested_leverage=0.0,
+                entry_px=0.0,
+                tp_px=0.0,
+                sl_px=0.0,
+                risk_verdict=RiskVerdict.REJECTED_RISK_PCT,
+                filled=False,
+                status="rejected_v1_allowlist",
+                error=(f"{symbol} is not in v1 allowlist "
+                       f"({sorted(V1_TRADE_SYMBOLS)}); research-only"),
+            )
+        if side not in {"long", "short"}:
+            return OrderResult(
+                signal_ts=intent.signal_ts,
+                symbol=symbol,
+                side=side,
+                requested_size_usd=0.0,
+                requested_leverage=0.0,
+                entry_px=0.0,
+                tp_px=0.0,
+                sl_px=0.0,
+                risk_verdict=RiskVerdict.REJECTED_RISK_PCT,
+                filled=False,
+                status="rejected",
+                error="intent side must be long or short",
+            )
+        if intent.entry_px <= 0 or intent.sl_px <= 0:
+            return OrderResult(
+                signal_ts=intent.signal_ts,
+                symbol=symbol,
+                side=side,
+                requested_size_usd=0.0,
+                requested_leverage=0.0,
+                entry_px=0.0,
+                tp_px=0.0,
+                sl_px=0.0,
+                risk_verdict=RiskVerdict.REJECTED_RISK_PCT,
+                filled=False,
+                status="rejected",
+                error="entry_px and sl_px must be positive",
+            )
+
+        is_buy = side == "long"
+        entry_r = self._round_to_tick(symbol, intent.entry_px)
+        sl_r = self._round_to_tick(symbol, intent.sl_px)
+        if is_buy and sl_r >= entry_r:
+            return OrderResult(
+                signal_ts=intent.signal_ts,
+                symbol=symbol,
+                side=side,
+                requested_size_usd=0.0,
+                requested_leverage=0.0,
+                entry_px=entry_r,
+                tp_px=0.0,
+                sl_px=sl_r,
+                risk_verdict=RiskVerdict.REJECTED_RISK_PCT,
+                filled=False,
+                status="rejected",
+                error="long stop must be below entry",
+            )
+        if not is_buy and sl_r <= entry_r:
+            return OrderResult(
+                signal_ts=intent.signal_ts,
+                symbol=symbol,
+                side=side,
+                requested_size_usd=0.0,
+                requested_leverage=0.0,
+                entry_px=entry_r,
+                tp_px=0.0,
+                sl_px=sl_r,
+                risk_verdict=RiskVerdict.REJECTED_RISK_PCT,
+                filled=False,
+                status="rejected",
+                error="short stop must be above entry",
+            )
+
+        stop_distance = abs(entry_r - sl_r)
+        if intent.notional_usd is None:
+            size_coin, notional = self._size_position(entry_r, stop_distance)
+        else:
+            max_notional = self.bankroll * self.max_leverage
+            notional = min(float(intent.notional_usd), max_notional)
+            size_coin = notional / entry_r if entry_r > 0 else 0.0
+        size_r = self._round_size(symbol, size_coin)
+        if size_r <= 0:
+            return OrderResult(
+                signal_ts=intent.signal_ts,
+                symbol=symbol,
+                side=side,
+                requested_size_usd=0.0,
+                requested_leverage=0.0,
+                entry_px=entry_r,
+                tp_px=0.0,
+                sl_px=sl_r,
+                risk_verdict=RiskVerdict.REJECTED_RISK_PCT,
+                filled=False,
+                status="rejected",
+                error="position size rounds to zero",
+            )
+
+        notional = size_r * entry_r
+        leverage = notional / self.bankroll if self.bankroll > 0 else 0.0
+        stop_distance_usd = notional * (stop_distance / entry_r)
+        verdict = self._risk.check_trade(
+            symbol=symbol,
+            side=side,
+            size_usd=notional,
+            leverage=leverage,
+            stop_distance_usd=stop_distance_usd,
+        )
+        tp_r = self._round_to_tick(symbol, intent.tp_px) if intent.tp_px else 0.0
+        if verdict != RiskVerdict.APPROVED:
+            return OrderResult(
+                signal_ts=intent.signal_ts,
+                symbol=symbol,
+                side=side,
+                requested_size_usd=notional,
+                requested_leverage=leverage,
+                entry_px=entry_r,
+                tp_px=tp_r,
+                sl_px=sl_r,
+                risk_verdict=verdict,
+                filled=False,
+                status="risk_rejected",
+                size_coin=size_r,
+                error=f"risk rejected: {verdict.value}",
+            )
+
+        order_requests = [
+            {
+                "name": symbol,
+                "is_buy": is_buy,
+                "sz": size_r,
+                "limit_px": entry_r,
+                "order_type": {"limit": {"tif": "Gtc"}},
+                "reduce_only": False,
+            },
+        ]
+        if tp_r > 0:
+            order_requests.append(
+                {
+                    "name": symbol,
+                    "is_buy": not is_buy,
+                    "sz": size_r,
+                    "limit_px": tp_r,
+                    "order_type": {"trigger": {"triggerPx": tp_r, "isMarket": True, "tpsl": "tp"}},
+                    "reduce_only": True,
+                }
+            )
+        order_requests.append(
+            {
+                "name": symbol,
+                "is_buy": not is_buy,
+                "sz": size_r,
+                "limit_px": sl_r,
+                "order_type": {"trigger": {"triggerPx": sl_r, "isMarket": True, "tpsl": "sl"}},
+                "reduce_only": True,
+            }
+        )
+        return self._submit_bracket_orders(
+            signal_ts=intent.signal_ts,
+            symbol=symbol,
+            side=side,
+            notional=notional,
+            leverage=leverage,
+            entry_r=entry_r,
+            tp_r=tp_r,
+            sl_r=sl_r,
+            size_r=size_r,
+            verdict=verdict,
+            order_requests=order_requests,
+        )
+
+    def _submit_bracket_orders(
+        self,
+        *,
+        signal_ts: pd.Timestamp,
+        symbol: str,
+        side: str,
+        notional: float,
+        leverage: float,
+        entry_r: float,
+        tp_r: float,
+        sl_r: float,
+        size_r: float,
+        verdict: RiskVerdict,
+        order_requests: list[dict],
+    ) -> OrderResult:
+        """Submit bracket orders and normalize Hyperliquid response parsing."""
+        expected_orders = len(order_requests)
+        tp_index = 1 if expected_orders == 3 else None
+        sl_index = expected_orders - 1
+        try:
+            resp = self.exchange.bulk_orders(order_requests, grouping=self.order_grouping)
+        except Exception as e:
+            logger.exception("bulk_orders failed")
+            return OrderResult(
+                signal_ts=signal_ts, symbol=symbol, side=side,
+                requested_size_usd=notional, requested_leverage=leverage,
+                entry_px=entry_r, tp_px=tp_r, sl_px=sl_r,
+                risk_verdict=verdict, filled=False, status="exchange_error",
+                size_coin=size_r, error=f"exchange error: {e}",
+            )
+
+        filled = False
+        entry_oid = tp_oid = sl_oid = None
+        error = None
+        status = "unknown"
+        needs_reconciliation = False
+        cancel_attempted = False
+        cancel_response = None
+        entry_status = tp_status = sl_status = None
+        try:
+            statuses = resp.get("response", {}).get("data", {}).get("statuses", [])
+            status_by_idx = {i: None for i in range(expected_orders)}
+            for i, st in enumerate(statuses):
+                if i in status_by_idx:
+                    status_by_idx[i] = st
+                if "error" in st:
+                    error = f"order {i}: {st['error']}"
+                elif "resting" in st:
+                    oid = st["resting"]["oid"]
+                    if i == 0:
+                        entry_oid = oid
+                    elif tp_index is not None and i == tp_index:
+                        tp_oid = oid
+                    elif i == sl_index:
+                        sl_oid = oid
+                elif "filled" in st:
+                    oid = st["filled"].get("oid")
+                    if i == 0:
+                        entry_oid = oid
+                    elif tp_index is not None and i == tp_index:
+                        tp_oid = oid
+                    elif i == sl_index:
+                        sl_oid = oid
+            entry_status = status_by_idx.get(0)
+            tp_status = status_by_idx.get(tp_index) if tp_index is not None else None
+            sl_status = status_by_idx.get(sl_index)
+            entry_live = entry_oid is not None
+            tp_ok = tp_index is None or tp_oid is not None
+            sl_ok = sl_oid is not None
+            child_failure = error is not None and entry_live
+            if child_failure:
+                cancel_attempted, cancel_response, cancel_error = self._cancel_entry_if_possible(symbol, entry_oid)
+                needs_reconciliation = True
+                if cancel_error:
+                    error = f"{error}; orphan cancel failed: {cancel_error}"
+                elif cancel_attempted:
+                    error = f"{error}; attempted to cancel orphan entry oid={entry_oid}"
+                status = "orphan_error"
+            elif error:
+                status = "rejected"
+            elif entry_live and tp_ok and sl_ok:
+                status = "submitted"
+            else:
+                error = f"incomplete order response: {statuses}"
+                status = "reconcile_unknown"
+                needs_reconciliation = True
+            filled = status == "submitted"
+        except Exception as e:
+            error = f"parse error: {e}; raw={resp}"
+            status = "parse_error"
+            needs_reconciliation = True
+
+        return OrderResult(
+            signal_ts=signal_ts, symbol=symbol, side=side,
+            requested_size_usd=notional, requested_leverage=leverage,
+            entry_px=entry_r, tp_px=tp_r, sl_px=sl_r,
+            risk_verdict=verdict, filled=filled, status=status,
+            size_coin=size_r, needs_reconciliation=needs_reconciliation,
+            cancel_attempted=cancel_attempted, error=error,
+            entry_oid=entry_oid, tp_oid=tp_oid, sl_oid=sl_oid,
+            entry_status=entry_status, tp_status=tp_status, sl_status=sl_status,
+            cancel_response=cancel_response,
+            response=resp,
+        )
 
     def execute(self, signal: CascadeSignal, candles: pd.DataFrame,
                 current_price: Optional[float] = None) -> OrderResult:

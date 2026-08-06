@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-08-06 - Add execution canary and paper-to-live bracket intent
+
+Codex moved the build path from research-only loops toward tomorrow's execution-grade canary.
+
+**What changed**
+- `src/execution/order_manager.py` now has `BracketOrderIntent` plus `OrderManager.execute_bracket_intent()`, so a deterministic paper lane can hand the live order manager the exact entry/stop/target bracket instead of re-deriving TP/SL from ATR.
+- The new bracket-intent path still enforces the v1 allowlist, stop geometry, position rounding, leverage cap, risk-per-trade cap, reduce-only child orders, and `normalTpsl` grouping.
+- `scripts/run_execution_canary.py` is the new one-command canary runner. Paper mode runs `paper_decision_loop`, runs the paper audit, and writes `data/execution_canary_status.json` plus `.md`.
+- Live mode is double-armed: `HYPHYLIQUID_LIVE_TRADING_ENABLED=1` and `--i-understand-real-orders` are both required, and `HYPERLIQUID_ENV` must be `mainnet`.
+- `.env.example` documents the live arming flag.
+- Added tests for the execution-canary live guard and bracket-intent order-manager path.
+
+**First run**
+- `scripts/run_execution_canary.py --mode paper --max-new 250 --recent 12` completed.
+- Paper pass: 155 decisions written, 1 position opened, 1 closed, 0 audit anomalies.
+- Current paper performance remains negative; this change is plumbing/safety, not a strategy promotion.
+
+**Verification**
+- `python -m py_compile scripts/run_execution_canary.py tests/test_execution_canary.py src/execution/order_manager.py tests/test_order_manager.py`
+- `python -m unittest tests.test_execution_canary -v` -> 5/5 passing
+- Dependency-free bracket-intent smoke script -> OK
+- Full `tests.test_order_manager` could not run in this session because the fallback Python lacks `pandas` and the repo venv points at a missing Windows Store Python.
+
+---
+
 ## 2026-08-06 - BTC ask-heavy × failed-reclaim JOIN backtest + ETH paper/research lane
 
 Per Slim 2026-08-06: "BTC ask-heavy needs a more specific failed-reclaim join, not generic book persistence. ETH just earned a focused paper/research lane."
