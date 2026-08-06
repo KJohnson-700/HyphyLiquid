@@ -4,6 +4,58 @@
 
 ---
 
+## 2026-08-06 - Add book-persistence / stale-book / trade-flow filter backtest
+
+Per Slim's 2026-08-06 spec. BTC/ETH only. Research-only backtest that adds three new context filters to the cascade-fade playbook. Hard scope: no execution, no risk.py, no order_manager changes.
+
+**What changed**
+- New `scripts/run_book_persistence_filter.py` (~38KB) — per-event feature assembler + per-bucket stats against the standard promotion gate
+- New `tests/test_book_persistence_filter.py` — 49/49 tests passing. Covers: BBO/L2/trade parsers, imbalance math, persistence-counting (consecutive same-direction BBO over 5m window), stale-book flag (spread widened >1.5x AND mid drift <0.01%), trade-flow stats (30s/60s windows), flow-amplifies/fades labels (side-aware), book-absorbed/amplified labels, promotion gate, full per-event feature assembly smoke test
+- Binary-search window helpers (`_trades_in_window`, `_bbo_window`, `_bbo_imbalance_series`) so per-event feature work is O(log N) instead of O(N) over 2M+ BBO snapshots
+- Bucket key: `(scope, symbol, lane, paper_gate)` reuses same bucketing pattern as the current-gate paper audit
+
+**Features computed per cascade**
+- BBO imbalance at event + bucket (bid_heavy / balanced / ask_heavy)
+- L2 top-5 imbalance at event + bucket
+- BBO persistence: consecutive same-direction imbalance in [event-5m, event], threshold 30s
+- Stale book: spread widened >1.5x 5m median AND mid drift <0.01%
+- Post-event BBO drift at 30s/60s (book absorbed vs amplified)
+- Trade-flow imbalance at 30s/60s (amplifies vs fades the cascade)
+
+**Playbook filters tested**
+- `generic` (control)
+- `persistent_bid_heavy` / `persistent_ask_heavy`
+- `stale_book`
+- `flow_amplifies_30s` / `flow_amplifies_60s`
+- `flow_fades_30s` / `flow_fades_60s`
+- `book_absorbed_30s` / `book_amplified_30s`
+- `persistent_bid_heavy_AND_flow_fades_30s` (combined)
+
+**Real data read (2026-08-06, 1305 BTC/ETH cascades)**
+- 1224 per-event records computed, 81 skipped (no entry/exit coverage)
+- **Two passes** (n>=30, PF>1.5, med>0, top_win_share<=35%):
+  - **ETH flow_amplifies_30s 5m**: n=30, WR 56.7%, PF **2.01**, med +0.0268%, top 12.2%
+  - **ETH flow_amplifies_60s 15m**: n=39, PF **1.62**, med +0.0581%, top 20.1%
+- BTC generic: PF 0.93-1.00 across horizons (decay continues, matches prior backtest cycles)
+- BTC book_absorbed_30s 60m: n=172, PF 1.36, med +0.0360% (close to threshold, doesn't pass PF>1.5)
+- BTC flow_amplifies_*: PF 0.11-0.35, much worse than ETH (PF 1.31-2.01) — flow direction matters differently per symbol
+- ETH persistent_bid_heavy / ask_heavy: n=12-13 (too small to evaluate)
+
+**Hard scope held**
+- Zero changes to execution, order_manager, risk.py
+- Outputs are research-only: `data/book_persistence_filter_results.json` + `data/book_persistence_filter_summary.md`
+- Cycle did not change (research script is one-off, not wired into the rebuild cycle)
+
+---
+
+## 2026-08-06 - Losing-lane rescue experiment sweep
+
+Codex used MiniMax CLI plus external source checks to refocus strategy research from new-bot ideas to concrete rescue experiments for weak lanes. Vault note: `research/2026-08-06-LOSING-LANE-RESCUE-EXPERIMENTS.md`.
+
+**Decision:** next research should test context filters and failure-mode diagnostics: BTC ask-heavy persistence/stale-book audit, ETH balanced-reclaim near-miss filter, HYPE wide-bucket isolation, DOGE/BNB threshold sanity, SOL adaptive dislocation, and HIP-3 metals funding/basis probe. No execution/risk/order-manager changes.
+
+---
+
 ## 2026-08-05 - Add current-gate-only paper audit section
 
 Per Slim's 2026-08-05 spec. New section in `scripts/run_paper_audit.py` that separates legacy paper trades from current active gated paper trades. Hard scope: research/audit only. Does NOT touch execution, order_manager, risk.py.
