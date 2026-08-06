@@ -1,4 +1,4 @@
-"""Live-like paper decision loop for BTC/HYPE liquidation lanes.
+"""Live-like paper decision loop for BTC/ETH/HYPE liquidation lanes.
 
 This loop consumes the same local live data files used by the rebuild flow:
 `data/cascades.jsonl` and `data/ws_candle/*.jsonl`. It never imports the real
@@ -12,6 +12,7 @@ import json
 import logging
 import sys
 import time
+from bisect import bisect_left, bisect_right
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,12 +51,13 @@ BTC_TRAIL_BPS = 10.0
 BTC_REQUIRED_IMBALANCE_BUCKET = "ask_heavy"
 
 # ETH book-persistence fade lane (research-only paper).
-# ETH B-side cascades with BBO ask_heavy at event time -> long fade
-# (5m horizon, 20bps initial stop, no trail). Execution is OFF
-# (research_paper scope). The 5m horizon mirrors the
-# ETH flow_amplifies_30s 5m pass (PF 2.01, n=30) from the
-# 2026-08-06 book-persistence backtest.
+# ETH B-side cascades with BBO ask_heavy at event time AND 30s post-event
+# trade flow that amplifies the cascade -> long fade. Execution is OFF
+# (research_paper scope). This mirrors the ETH flow_amplifies_30s 5m pass
+# (PF 2.01, n=30) from the 2026-08-06 book-persistence backtest.
 ETH_REQUIRED_IMBALANCE_BUCKET = "ask_heavy"
+ETH_REQUIRED_FLOW_LABEL = "amplifies"
+ETH_FLOW_WINDOW_SECONDS = 30
 ETH_MAX_HOLD_MINUTES = 5
 ETH_STOP_BUFFER_BPS = 20.0
 ETH_WAIT_MINUTES = 1
@@ -180,6 +182,95 @@ def _load_completed_candles(symbol: str, *, data_dir: Path, now_ms: int | None =
                 continue
             latest_by_open[start] = bar
     return [latest_by_open[k] for k in sorted(latest_by_open)]
+
+
+def _parse_trade(row: dict) -> tuple[str, float, float, int] | None:
+    """Parse one ws_trades row into (side, px, sz, ts_ms)."""
+    payload = row.get("payload") if isinstance(row, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    side = payload.get("side")
+    if side not in {"A", "B"}:
+        return None
+    try:
+        px = float(payload.get("px", 0) or 0)
+        sz = float(payload.get("sz", 0) or 0)
+        ts = int(payload.get("time") or payload.get("ts") or 0)
+    except (TypeError, ValueError):
+        return None
+    if px <= 0 or sz <= 0 or ts <= 0:
+        return None
+    return side, px, sz, ts
+
+
+def _load_trades(symbol: str, *, data_dir: Path) -> list[dict]:
+    """Load ws_trades rows for a symbol, sorted by timestamp."""
+    trades_dir = data_dir / "ws_trades"
+    if not trades_dir.exists():
+        return []
+    rows: list[dict] = []
+    for path in sorted(trades_dir.glob(f"{symbol.lower()}_*.jsonl")):
+        for raw in _load_jsonl(path):
+            parsed = _parse_trade(raw)
+            if parsed is None:
+                continue
+            side, px, sz, ts = parsed
+            rows.append({"ts": ts, "side": side, "px": px, "sz": sz})
+    rows.sort(key=lambda r: r["ts"])
+    return rows
+
+
+def _trades_in_window(trades: list[dict], start_ms: int, end_ms: int) -> list[dict]:
+    """Return trades with ts in [start_ms, end_ms]."""
+    if not trades:
+        return []
+    timestamps = [int(t["ts"]) for t in trades]
+    left = bisect_left(timestamps, start_ms)
+    right = bisect_right(timestamps, end_ms)
+    return trades[left:right]
+
+
+def _trade_flow_stats(trades: Iterable[dict]) -> dict:
+    """Compute count/notional trade-flow imbalance."""
+    buys = 0
+    sells = 0
+    buy_notional = 0.0
+    sell_notional = 0.0
+    for trade in trades:
+        side = trade.get("side")
+        px = float(trade.get("px", 0) or 0)
+        sz = float(trade.get("sz", 0) or 0)
+        if side == "B":
+            buys += 1
+            buy_notional += px * sz
+        elif side == "A":
+            sells += 1
+            sell_notional += px * sz
+    total = buys + sells
+    notional_total = buy_notional + sell_notional
+    return {
+        "buy_count": buys,
+        "sell_count": sells,
+        "buy_notional": buy_notional,
+        "sell_notional": sell_notional,
+        "flow_imbalance": (buys - sells) / total if total else 0.0,
+        "notional_imbalance": (
+            (buy_notional - sell_notional) / notional_total
+            if notional_total > 0
+            else 0.0
+        ),
+    }
+
+
+def _trade_flow_label(cascade_side: str, flow_imbalance: float) -> str:
+    """Label post-event trade flow relative to cascade direction."""
+    if abs(flow_imbalance) < 0.20:
+        return "neutral"
+    if cascade_side == "A":
+        return "amplifies" if flow_imbalance > 0 else "fades"
+    if cascade_side == "B":
+        return "amplifies" if flow_imbalance < 0 else "fades"
+    return "neutral"
 
 
 def _candles_until(candles: list[dict], cutoff_ms: int) -> list[dict]:
@@ -408,6 +499,8 @@ def _build_eth_position(
     candles: list[dict],
     entry_idx: int,
     response_closes: Iterable[float],
+    flow_label_30s: str,
+    flow_stats_30s: dict,
 ) -> tuple[PaperDecision, PaperPosition | None]:
     """ETH book-persistence fade lane (research-only paper).
 
@@ -419,6 +512,7 @@ def _build_eth_position(
       - Symbol: ETH
       - Side: B (forced sells, fade = long)
       - BBO ask_heavy at cascade time (top_book_imbalance < 0.45)
+      - 30s post-event trade flow amplifies the cascade
       - Wait 1m for early reclaim; if reclaim happens, reject.
       - Enter LONG at the end of the wait window.
       - Stop: event_vwap * (1 - ETH_STOP_BUFFER_BPS / 1e4)
@@ -427,11 +521,9 @@ def _build_eth_position(
       - execution_allowed = False (research_paper scope only; OrderManager
         v1 will not route to live).
 
-    The 30s/60s post-event trade-flow "amplifies" filter was the
-    backtest qualifier; the live paper loop uses the cascade-time
-    BBO ask_heavy filter as a deterministic proxy that does not
-    require waiting 30s. Future: wire real-time trade-flow check
-    (paper_decision_loop would need a pending-state pattern).
+    The 30s post-event trade-flow "amplifies" filter is required here
+    because that was the actual passing backtest condition. BBO ask_heavy
+    alone was only a proxy and failed in paper.
     """
     key = _cascade_key(cascade)
     sym = str(cascade.get("symbol", "")).upper()
@@ -474,6 +566,18 @@ def _build_eth_position(
                 reason=(
                     "ETH paper gate requires "
                     f"top_book_imbalance={ETH_REQUIRED_IMBALANCE_BUCKET}, got {book_imbalance}"
+                ),
+            ),
+            None,
+        )
+    if flow_label_30s != ETH_REQUIRED_FLOW_LABEL:
+        return (
+            PaperDecision(
+                **base,
+                decision="reject",
+                reason=(
+                    "ETH paper gate requires "
+                    f"flow_amplifies_{ETH_FLOW_WINDOW_SECONDS}s, got {flow_label_30s}"
                 ),
             ),
             None,
@@ -525,6 +629,8 @@ def _build_eth_position(
             "paper_gate": f"top_book_imbalance={ETH_REQUIRED_IMBALANCE_BUCKET}",
             "top_book_imbalance": cascade.get("top_book_imbalance"),
             "top_book_imbalance_bucket": book_imbalance,
+            "flow_label_30s": flow_label_30s,
+            "flow_stats_30s": flow_stats_30s,
             "wait_minutes": ETH_WAIT_MINUTES,
             "initial_stop_bps": round(stop_bps, 4),
             "lane_basis": "eth_book_persistence_fade (research-only)",
@@ -616,7 +722,11 @@ def _build_hype_position(cascade: dict, candles: list[dict], entry_idx: int) -> 
     return PaperDecision(**base, decision="open_position", reason="HYPE B-side range/liquidation scalp", paper_id=paper_id), position
 
 
-def build_position_for_cascade(cascade: dict, candles_by_symbol: dict[str, list[dict]]) -> tuple[PaperDecision | None, PaperPosition | None]:
+def build_position_for_cascade(
+    cascade: dict,
+    candles_by_symbol: dict[str, list[dict]],
+    trades_by_symbol: dict[str, list[dict]] | None = None,
+) -> tuple[PaperDecision | None, PaperPosition | None]:
     """Build a deterministic paper decision and optional paper position."""
     sym = str(cascade.get("symbol", "")).upper()
     if sym not in PAPER_SYMBOLS:
@@ -646,7 +756,25 @@ def build_position_for_cascade(cascade: dict, candles_by_symbol: dict[str, list[
         closes = [_close(c) for c in candles[entry_idx:needed]]
         if any(c is None for c in closes):
             return None, None
-        return _build_eth_position(cascade, candles, entry_idx, [float(c) for c in closes if c is not None])
+        event_ts = _cascade_ts_ms(cascade)
+        if event_ts is None:
+            return None, None
+        trades = (trades_by_symbol or {}).get(sym, [])
+        flow_window = _trades_in_window(
+            trades,
+            event_ts,
+            event_ts + ETH_FLOW_WINDOW_SECONDS * 1000,
+        )
+        flow_stats = _trade_flow_stats(flow_window)
+        flow_label = _trade_flow_label(side, float(flow_stats["flow_imbalance"]))
+        return _build_eth_position(
+            cascade,
+            candles,
+            entry_idx,
+            [float(c) for c in closes if c is not None],
+            flow_label,
+            flow_stats,
+        )
     return _build_hype_position(cascade, candles, entry_idx)
 
 
@@ -659,6 +787,7 @@ def run_once(*, data_dir: Path = DATA_DIR, state_path: Path = STATE_PATH, max_ne
     cascades = _load_cascades(data_dir)
     symbols = {str(c.get("symbol", "")).upper() for c in cascades if str(c.get("symbol", "")).upper() in PAPER_SYMBOLS}
     candles_by_symbol = {sym: _load_completed_candles(sym, data_dir=data_dir) for sym in symbols}
+    trades_by_symbol = {"ETH": _load_trades("ETH", data_dir=data_dir)} if "ETH" in symbols else {}
     decisions_written = 0
     positions_opened = 0
     positions_closed = 0
@@ -691,7 +820,7 @@ def run_once(*, data_dir: Path = DATA_DIR, state_path: Path = STATE_PATH, max_ne
     for cascade in new_cascades:
         mark_open_positions(_cascade_ts_ms(cascade))
         key = _cascade_key(cascade)
-        decision, position = build_position_for_cascade(cascade, candles_by_symbol)
+        decision, position = build_position_for_cascade(cascade, candles_by_symbol, trades_by_symbol)
         if decision is None:
             continue
         processed.add(key)

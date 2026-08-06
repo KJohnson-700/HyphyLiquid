@@ -40,6 +40,27 @@ Per Slim 2026-08-06: "BTC ask-heavy needs a more specific failed-reclaim join, n
 
 ---
 
+## 2026-08-06 - Fix rebuild bottleneck and ETH paper proxy gate
+
+Codex fixed two issues found during the forced rebuild cycle.
+
+**What changed**
+- `scripts/build_cascades.py` now enriches cascades one symbol-date group at a time instead of loading every L2/context index at once. This keeps memory bounded after BTC/ETH/SOL/HYPE/DOGE/BNB/HIP-3 data growth.
+- Full all-symbol enriched cascade build completed successfully after the fix: 29,367 raw events -> 3,125 cascades.
+- `scripts/paper_decision_loop.py` now requires the actual ETH `flow_amplifies_30s` condition for the `eth_book_persistence_fade` research-paper lane instead of using cascade-time `ask_heavy` as a proxy.
+- Added/updated unit coverage in `tests/test_paper_decision_loop.py` for ETH trade-flow gating.
+
+**Why**
+- The forced rebuild timed out twice before the grouped-enrichment fix.
+- Fresh paper audit showed the ETH `ask_heavy` proxy was losing: research-paper ETH n=19, PF 0.1021. That proxy did not match the passing backtest condition, so it is now blocked unless 30s post-event trade flow actually amplifies the cascade.
+
+**Verification**
+- `python -m py_compile scripts/build_cascades.py scripts/paper_decision_loop.py tests/test_paper_decision_loop.py`
+- `python -m unittest tests.test_paper_decision_loop -v` -> 16/16 passing
+- `scripts/run_rebuild_cycle.py --force` completed and updated baseline.
+
+---
+
 ## 2026-08-06 - Add book-persistence / stale-book / trade-flow filter backtest
 
 Per Slim's 2026-08-06 spec. BTC/ETH only. Research-only backtest that adds three new context filters to the cascade-fade playbook. Hard scope: no execution, no risk.py, no order_manager changes.

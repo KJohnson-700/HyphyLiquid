@@ -18,6 +18,7 @@ import sys
 from bisect import bisect_left
 from datetime import datetime, timezone
 from pathlib import Path
+from collections import defaultdict
 from typing import Iterable
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -150,6 +151,68 @@ def _build_indexes(symbol_dates: Iterable[tuple[str, str]]) -> tuple[dict, dict]
     return l2_idx, ctx_idx
 
 
+def _enrich_cascade(
+    c: dict,
+    l2_index: SnapshotIndex,
+    ctx_index: SnapshotIndex,
+    max_snapshot_lag: int,
+) -> dict | None:
+    """Attach nearest book/context features to one cascade."""
+    try:
+        ts_dt = datetime.fromisoformat(c["start_ts"])
+    except (TypeError, ValueError):
+        return None
+    if ts_dt.tzinfo is None:
+        ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+    ts_ms = int(ts_dt.timestamp() * 1000)
+
+    l2_nearest = l2_index.nearest_with_delta(ts_ms)
+    ctx_nearest = ctx_index.nearest_with_delta(ts_ms)
+    l2_rec = (
+        l2_nearest[0]
+        if l2_nearest and abs(l2_nearest[1]) <= max_snapshot_lag
+        else None
+    )
+    ctx_rec = (
+        ctx_nearest[0]
+        if ctx_nearest and abs(ctx_nearest[1]) <= max_snapshot_lag
+        else None
+    )
+    l2_delta_s = l2_nearest[1] if l2_nearest and l2_rec else None
+    ctx_delta_s = ctx_nearest[1] if ctx_nearest and ctx_rec else None
+    l2_payload = l2_rec.get("payload") if isinstance(l2_rec, dict) else None
+    book_features = _bbo_from_l2book(l2_payload)
+    ctx_features = _asset_ctx_features(ctx_rec)
+
+    # VWAP sanity check and average fill notional are distinct.
+    try:
+        n = int(c.get("n_fills", 0)) or 0
+        notional = float(c.get("total_notional", 0)) or 0.0
+        avg_fill_notional = (notional / n) if n > 0 else None
+    except (TypeError, ValueError):
+        avg_fill_notional = None
+
+    return {
+        **c,
+        "event_ts": c["start_ts"],
+        "event_ts_ms": ts_ms,
+        "vwap_check": c.get("event_vwap"),
+        "avg_fill_notional": avg_fill_notional,
+        "bbo_source_ts": (
+            l2_payload.get("ts") or l2_payload.get("time")
+            if isinstance(l2_payload, dict) else None
+        ),
+        "l2_delta_s": round(l2_delta_s, 3) if l2_delta_s is not None else None,
+        **book_features,
+        **ctx_features,
+        "ctx_delta_s": round(ctx_delta_s, 3) if ctx_delta_s is not None else None,
+        "post_1m_return": None,
+        "post_5m_return": None,
+        "post_15m_return": None,
+        "post_30m_return": None,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -203,85 +266,44 @@ def main() -> int:
         )
         print(f"\nWrote {len(cascades)} cascades to {CASCADES_PATH.name} (no enrichment)")
     else:
-        # Build per-file indexes ONCE, then bisect per cascade.
-        symbol_dates = {
-            (c["symbol"], date_str)
-            for c in cascades
-            if c.get("symbol") and (date_str := _date_str_from_iso(c.get("start_ts")))
-        }
-        print(f"\nBuilding snapshot indexes for {len(symbol_dates)} symbol-date files...")
-        l2_idx, ctx_idx = _build_indexes(symbol_dates)
-        for (sym, date_str), idx in l2_idx.items():
-            print(f"  l2  {sym} {date_str}: {len(idx.timestamps)} records")
-        for (sym, date_str), idx in ctx_idx.items():
-            print(f"  ctx {sym} {date_str}: {len(idx.timestamps)} records")
+        # Build one symbol-date pair at a time. Loading all L2/context
+        # indexes at once grows memory quickly once HIP-3 and alt streams
+        # are enabled; grouped enrichment keeps the all-symbol rebuild close
+        # to the single-symbol runtime profile.
+        cascades_by_key: dict[tuple[str, str], list[dict]] = defaultdict(list)
+        for c in cascades:
+            sym = c.get("symbol")
+            date_str = _date_str_from_iso(c.get("start_ts"))
+            if sym and date_str:
+                cascades_by_key[(sym, date_str)].append(c)
 
-        written = 0
+        print(f"\nBuilding snapshot indexes for {len(cascades_by_key)} symbol-date files...")
+        enriched: list[dict] = []
         skipped = 0
-        with CASCADES_PATH.open("w", encoding="utf-8") as f:
-            for c in cascades:
-                sym = c.get("symbol")
-                try:
-                    ts_dt = datetime.fromisoformat(c["start_ts"])
-                except (TypeError, ValueError):
+        for sym, date_str in sorted(cascades_by_key):
+            stem = _file_stem(sym)
+            l2_path = PROJECT_ROOT / "data" / "ws_l2book" / f"{stem}_{date_str}.jsonl"
+            ctx_path = PROJECT_ROOT / "data" / "asset_ctx" / f"{stem}_{date_str}.jsonl"
+            l2_index = SnapshotIndex(l2_path)
+            ctx_index = SnapshotIndex(ctx_path)
+            print(
+                f"  {sym} {date_str}: "
+                f"l2={len(l2_index.timestamps)} ctx={len(ctx_index.timestamps)} "
+                f"cascades={len(cascades_by_key[(sym, date_str)])}"
+            )
+            for c in cascades_by_key[(sym, date_str)]:
+                merged = _enrich_cascade(c, l2_index, ctx_index, args.max_snapshot_lag)
+                if merged is None:
                     skipped += 1
                     continue
-                if ts_dt.tzinfo is None:
-                    ts_dt = ts_dt.replace(tzinfo=timezone.utc)
-                ts_ms = int(ts_dt.timestamp() * 1000)
-                date_str = ts_dt.strftime("%Y-%m-%d")
+                enriched.append(merged)
 
-                l2_index = l2_idx.get((sym, date_str))
-                ctx_index = ctx_idx.get((sym, date_str))
-                l2_nearest = l2_index.nearest_with_delta(ts_ms) if l2_index else None
-                ctx_nearest = ctx_index.nearest_with_delta(ts_ms) if ctx_index else None
-                l2_rec = (
-                    l2_nearest[0]
-                    if l2_nearest and abs(l2_nearest[1]) <= args.max_snapshot_lag
-                    else None
-                )
-                ctx_rec = (
-                    ctx_nearest[0]
-                    if ctx_nearest and abs(ctx_nearest[1]) <= args.max_snapshot_lag
-                    else None
-                )
-                l2_delta_s = l2_nearest[1] if l2_nearest and l2_rec else None
-                ctx_delta_s = ctx_nearest[1] if ctx_nearest and ctx_rec else None
-                l2_payload = l2_rec.get("payload") if isinstance(l2_rec, dict) else None
-                book_features = _bbo_from_l2book(l2_payload)
-                ctx_features = _asset_ctx_features(ctx_rec)
-
-                # VWAP sanity check and average fill notional are distinct.
-                try:
-                    n = int(c.get("n_fills", 0)) or 0
-                    notional = float(c.get("total_notional", 0)) or 0.0
-                    avg_fill_notional = (notional / n) if n > 0 else None
-                except (TypeError, ValueError):
-                    avg_fill_notional = None
-
-                merged = {
-                    **c,
-                    "event_ts": c["start_ts"],
-                    "event_ts_ms": ts_ms,
-                    "vwap_check": c.get("event_vwap"),
-                    "avg_fill_notional": avg_fill_notional,
-                    "bbo_source_ts": (
-                        l2_payload.get("ts") or l2_payload.get("time")
-                        if isinstance(l2_payload, dict) else None
-                    ),
-                    "l2_delta_s": round(l2_delta_s, 3) if l2_delta_s is not None else None,
-                    **book_features,
-                    **ctx_features,
-                    "ctx_delta_s": round(ctx_delta_s, 3) if ctx_delta_s is not None else None,
-                    "post_1m_return": None,
-                    "post_5m_return": None,
-                    "post_15m_return": None,
-                    "post_30m_return": None,
-                }
-                f.write(json.dumps(merged) + "\n")
-                written += 1
+        enriched.sort(key=lambda c: c.get("start_ts", ""))
+        with CASCADES_PATH.open("w", encoding="utf-8") as f:
+            for row in enriched:
+                f.write(json.dumps(row) + "\n")
         print(
-            f"\nWrote {written} enriched cascades to {CASCADES_PATH.name} "
+            f"\nWrote {len(enriched)} enriched cascades to {CASCADES_PATH.name} "
             f"(skipped {skipped} on failure)"
         )
 

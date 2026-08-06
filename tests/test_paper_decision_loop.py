@@ -9,10 +9,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.paper_decision_loop import (  # noqa: E402
+    ETH_FLOW_WINDOW_SECONDS,
     ETH_MAX_HOLD_MINUTES,
     ETH_REQUIRED_IMBALANCE_BUCKET,
+    ETH_REQUIRED_FLOW_LABEL,
     ETH_STOP_BUFFER_BPS,
     PAPER_SYMBOLS,
+    _trade_flow_label,
+    _trade_flow_stats,
     _build_eth_position,
     build_position_for_cascade,
     run_once,
@@ -40,6 +44,10 @@ def _bar(t_ms: int, c: float, h: float | None = None, l: float | None = None, *,
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+
+def _trade(t_ms: int, side: str, px: float = 100.0, sz: float = 1.0) -> dict:
+    return {"ts": t_ms, "side": side, "px": px, "sz": sz}
 
 
 class TestPaperBroker(unittest.TestCase):
@@ -334,12 +342,15 @@ class TestEthPaperLane(unittest.TestCase):
         # ETH flow_amplifies_30s 5m pass (PF 2.01 n=30) from the
         # 2026-08-06 book-persistence backtest. Lock those knobs.
         self.assertEqual(ETH_REQUIRED_IMBALANCE_BUCKET, "ask_heavy")
+        self.assertEqual(ETH_REQUIRED_FLOW_LABEL, "amplifies")
+        self.assertEqual(ETH_FLOW_WINDOW_SECONDS, 30)
         self.assertEqual(ETH_STOP_BUFFER_BPS, 20.0)
         self.assertEqual(ETH_MAX_HOLD_MINUTES, 5)
 
     def test_eth_b_side_continuation_opens_research_paper_position(self):
         # Synthesize: ETH B-side cascade at 100, BBO ask_heavy, no reclaim
-        # in 1m wait. Long fade with 5m horizon.
+        # in 1m wait, and sell-heavy 30s post-event flow. Long fade with
+        # 5m horizon.
         # NB: imbalance_bucket uses a CENTERED convention (-1 ask_heavy,
         # +1 bid_heavy, |x|<=0.25 balanced). Negative values mean ask_heavy,
         # matching the BTC paper loop's gate (BTC_REQUIRED_IMBALANCE_BUCKET).
@@ -355,9 +366,17 @@ class TestEthPaperLane(unittest.TestCase):
             "total_notional": 75000,
             "top_book_imbalance": -0.5,  # ask_heavy (centered convention)
         }
+        trades = {
+            "ETH": [
+                _trade(eth_base + 31_000, "A"),
+                _trade(eth_base + 32_000, "A"),
+                _trade(eth_base + 33_000, "A"),
+                _trade(eth_base + 34_000, "B"),
+            ]
+        }
 
         decision, position = build_position_for_cascade(
-            cascade, {"ETH": eth_candles}
+            cascade, {"ETH": eth_candles}, trades
         )
 
         self.assertIsNotNone(decision)
@@ -380,7 +399,35 @@ class TestEthPaperLane(unittest.TestCase):
         # Metadata must record the gate
         self.assertIn("paper_gate", position.metadata)
         self.assertIn("ask_heavy", position.metadata["paper_gate"])
+        self.assertEqual(position.metadata["flow_label_30s"], "amplifies")
         self.assertIn("research_source", position.metadata)
+
+    def test_eth_rejects_without_flow_amplification(self):
+        eth_base = _ms("2026-08-04T00:00:00+00:00")
+        eth_candles = [_bar(eth_base + i * 60_000, 100.0 + 0.1 * i, s="ETH") for i in range(20)]
+        cascade = {
+            "symbol": "ETH",
+            "side": "B",
+            "start_ts": "2026-08-04T00:00:30+00:00",
+            "event_vwap": 100.0,
+            "n_fills": 5,
+            "total_notional": 75000,
+            "top_book_imbalance": -0.5,
+        }
+        trades = {
+            "ETH": [
+                _trade(eth_base + 31_000, "B"),
+                _trade(eth_base + 32_000, "B"),
+                _trade(eth_base + 33_000, "A"),
+            ]
+        }
+
+        decision, position = build_position_for_cascade(cascade, {"ETH": eth_candles}, trades)
+
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.decision, "reject")
+        self.assertIn("flow_amplifies_30s", decision.reason)
+        self.assertIsNone(position)
 
     def test_eth_rejects_when_top_book_imbalance_not_ask_heavy(self):
         # Centered convention: +0.5 is bid_heavy -> gate rejects.
@@ -396,9 +443,7 @@ class TestEthPaperLane(unittest.TestCase):
             "top_book_imbalance": 0.5,  # bid_heavy (centered), gate rejects
         }
 
-        decision, position = build_position_for_cascade(
-            cascade, {"ETH": eth_candles}
-        )
+        decision, position = build_position_for_cascade(cascade, {"ETH": eth_candles}, {"ETH": []})
 
         self.assertIsNotNone(decision)
         self.assertEqual(decision.decision, "reject")
@@ -426,9 +471,7 @@ class TestEthPaperLane(unittest.TestCase):
             "top_book_imbalance": -0.5,  # ask_heavy
         }
 
-        decision, position = build_position_for_cascade(
-            cascade, {"ETH": eth_candles}
-        )
+        decision, position = build_position_for_cascade(cascade, {"ETH": eth_candles}, {"ETH": []})
 
         self.assertIsNotNone(decision)
         self.assertEqual(decision.decision, "reject")
@@ -480,7 +523,16 @@ class TestEthPaperLane(unittest.TestCase):
             "top_book_imbalance": -0.5,
         }
 
-        _, position = build_position_for_cascade(cascade, {"ETH": eth_candles})
+        trades = {
+            "ETH": [
+                _trade(eth_base + 31_000, "A"),
+                _trade(eth_base + 32_000, "A"),
+                _trade(eth_base + 33_000, "A"),
+                _trade(eth_base + 34_000, "B"),
+            ]
+        }
+
+        _, position = build_position_for_cascade(cascade, {"ETH": eth_candles}, trades)
 
         self.assertIsNotNone(position)
         # Entry at candle[1] (00:01:00) = 100.1; stop = 99.8; stop_pct ≈ 0.003
@@ -489,6 +541,17 @@ class TestEthPaperLane(unittest.TestCase):
         self.assertLess(position.notional_usd, 4000.0)
         # Risk ≈ 10
         self.assertAlmostEqual(position.risk_usd, 10.0, places=1)
+
+    def test_eth_trade_flow_label_matches_backtest_semantics(self):
+        stats = _trade_flow_stats([
+            _trade(1000, "A"),
+            _trade(1001, "A"),
+            _trade(1002, "A"),
+            _trade(1003, "B"),
+        ])
+
+        self.assertLess(stats["flow_imbalance"], 0)
+        self.assertEqual(_trade_flow_label("B", stats["flow_imbalance"]), "amplifies")
 
 
 if __name__ == "__main__":
