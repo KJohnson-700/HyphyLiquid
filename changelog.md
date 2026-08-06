@@ -4,6 +4,37 @@
 
 ---
 
+## 2026-08-05 - Add current-gate-only paper audit section
+
+Per Slim's 2026-08-05 spec. New section in `scripts/run_paper_audit.py` that separates legacy paper trades from current active gated paper trades. Hard scope: research/audit only. Does NOT touch execution, order_manager, risk.py.
+
+**What changed**
+- New `_current_gate_records(position_rows)`: filters to rows with `metadata.paper_gate` set (non-empty string). Excludes legacy (no gate) and research_paper scope (no v1 gate).
+- New `_summarize_current_gate_only(position_rows)`: per-bucket (scope, symbol, lane, gate) counts of n, WR, PF, avg/median net return, avg/median R, exit reasons. BTC `ask_heavy` highlighted as a separate aggregate.
+- New `## Current Gate Only` section in `render_markdown` (above the Top Reject Reasons section, below By Symbol). Three sub-sections: gated/non-gated counts, BTC ask_heavy aggregate, by-bucket breakdown.
+- `main()` JSON output now includes `gated_closed` and `gated_btc_ask_heavy_n` for quick cycle summaries.
+- Existing full-history audit (`decision_summary`, `fill_summary`, `anomalies`, `legacy_warnings`, `recent`) is **preserved** — new section sits alongside, not replacing.
+
+**Tests added (4 new, 7 total in this file)**
+- `test_current_gate_only_separates_gated_from_legacy`: 1 BTC win + 1 BTC loss + 1 HYPE legacy. Verifies gated vs non-gated split, bucket key, WR/PF math, exit-reason counts, BTC ask_heavy highlight, and that the markdown section renders.
+- `test_current_gate_only_empty_when_no_gates`: dataset with only non-gated positions returns empty aggregates (no false positives).
+- `test_current_gate_records_filters_correctly`: tests the filter against empty/None/non-dict/missing-key edge cases.
+- `test_gate_bucket_key_format`: locks the bucket key tuple shape.
+
+**Real data read (2026-08-05)**
+- 25 closed fills total, 22 are legacy BTC (predate the ask_heavy gate), 1 BTC has the current ask_heavy gate (lost, initial stop), 1 HYPE has no v1 gate (research_paper).
+- BTC ask_heavy aggregate: n=1, WR=0%, PF=0, net=-0.31%, R=-1.49. Single trade, not interpretable yet.
+- 459 non-gated records (legacy + research_paper HYPE/SOL/etc).
+- The new section surfaces the single gated BTC trade alongside the 22 legacy warnings, so we can see the migration from legacy to current-gate going forward.
+
+---
+
+## 2026-08-05 - MiniMax hybrid strategy candidate sweep
+
+Codex used MiniMax CLI for a broad strategy synthesis pass and logged the filtered build order in the vault at `research/2026-08-05-HYBRID-STRATEGY-CANDIDATES-MINIMAX-SWEEP.md`. Decision: do not add a new live bot or promote alts; prioritize stricter hybrid classifiers around the existing liquidation trigger.
+
+---
+
 ## 2026-08-05 - SOL H1 watch: two-tier ladder (2 watch / 3 paper-routing)
 
 Per Slim's 2026-08-05 refinement to the SOL H1 decision rule. Research-only. No execution wiring.

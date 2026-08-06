@@ -118,6 +118,136 @@ def _summarize_decisions(decisions: list[dict]) -> dict:
     }
 
 
+def _current_gate_records(position_rows: Iterable[dict]) -> list[dict]:
+    """Yield only position rows that carry current gate metadata.
+
+    "Current" = metadata.paper_gate is a non-empty string. Legacy paper
+    trades (no gate field) and research-paper lanes (no v1 gate) are
+    excluded. Returned in source order (chronological as written).
+    """
+    out: list[dict] = []
+    for row in position_rows:
+        if not isinstance(row, dict):
+            continue
+        metadata = row.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        gate = metadata.get("paper_gate")
+        if not isinstance(gate, str) or not gate.strip():
+            continue
+        out.append(row)
+    return out
+
+
+def _gate_bucket_key(row: dict) -> tuple[str, str, str, str]:
+    """Bucket key for current-gate grouping: (scope, symbol, lane, paper_gate)."""
+    metadata = row.get("metadata", {}) if isinstance(row.get("metadata"), dict) else {}
+    return (
+        str(row.get("paper_scope", "")),
+        str(row.get("symbol", "")),
+        str(row.get("lane", "")),
+        str(metadata.get("paper_gate", "")),
+    )
+
+
+def _gate_pack(values: list[float], r_values: list[float], exit_reasons: Counter) -> dict:
+    n = len(values)
+    wins = [v for v in values if v > 0]
+    return {
+        "n": n,
+        "win_rate_pct": round(len(wins) / n * 100, 2) if n else 0.0,
+        "avg_net_return_pct": _avg(values),
+        "median_net_return_pct": _median(values),
+        "profit_factor": _profit_factor(values),
+        "avg_r_multiple": _avg(r_values),
+        "median_r_multiple": _median(r_values),
+        "exit_reasons": dict(sorted(exit_reasons.items())),
+    }
+
+
+def _summarize_current_gate_only(position_rows: Iterable[dict]) -> dict:
+    """Filter to current-gated positions, group by (scope, symbol, lane, gate).
+
+    Includes:
+      - per-group n / WR / PF / avg-median net return / avg-median R / exit reasons
+      - a BTC ask_heavy highlight bucket (the only v1 paper gate at the moment)
+      - opened + closed + still-open counts for the gated subset
+      - the legacy / research fraction (rows WITHOUT gate metadata) for context
+    """
+    rows = list(position_rows)
+    gated = _current_gate_records(rows)
+    non_gated = [r for r in rows if r not in gated]
+
+    opened_rows = [r for r in gated if r.get("event") == "opened"]
+    opened_paper_ids = {str(r.get("paper_id", "")) for r in opened_rows if r.get("paper_id")}
+
+    latest = _latest_fill_index(gated)
+    closed_rows: list[dict] = []
+    open_rows: list[dict] = []
+    for r in gated:
+        if r.get("event") == "opened":
+            paper_id = str(r.get("paper_id", ""))
+            fill = latest.get(paper_id, {}).get("fill")
+            if isinstance(fill, dict) and fill.get("status") == "closed":
+                closed_rows.append(r)
+            else:
+                open_rows.append(r)
+
+    # Group closed fills
+    bucket_values: dict[tuple[str, str, str, str], list[float]] = defaultdict(list)
+    bucket_r: dict[tuple[str, str, str, str], list[float]] = defaultdict(list)
+    bucket_exit: dict[tuple[str, str, str, str], Counter] = defaultdict(Counter)
+    for r in closed_rows:
+        paper_id = str(r.get("paper_id", ""))
+        fill = latest.get(paper_id, {}).get("fill", {})
+        if not isinstance(fill, dict):
+            continue
+        try:
+            net_pct = float(fill.get("net_return_pct", 0) or 0)
+            r_mult = float(fill.get("r_multiple", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        key = _gate_bucket_key(r)
+        bucket_values[key].append(net_pct)
+        bucket_r[key].append(r_mult)
+        bucket_exit[key][str(fill.get("exit_reason", ""))] += 1
+
+    by_bucket = {
+        "|".join(key): _gate_pack(bucket_values[key], bucket_r[key], bucket_exit[key])
+        for key in sorted(bucket_values)
+    }
+
+    # BTC ask_heavy highlight: any bucket where (symbol=BTC, paper_gate contains ask_heavy)
+    btc_ask_heavy_keys = [
+        key for key in bucket_values
+        if key[1] == "BTC" and "ask_heavy" in key[3]
+    ]
+    btc_ask_heavy = {
+        "|".join(key): _gate_pack(bucket_values[key], bucket_r[key], bucket_exit[key])
+        for key in sorted(btc_ask_heavy_keys)
+    }
+    # Flat aggregate across all BTC ask_heavy buckets
+    btc_ask_heavy_all: dict = {}
+    if btc_ask_heavy_keys:
+        all_net = [v for k in btc_ask_heavy_keys for v in bucket_values[k]]
+        all_r = [v for k in btc_ask_heavy_keys for v in bucket_r[k]]
+        all_exit: Counter = Counter()
+        for k in btc_ask_heavy_keys:
+            all_exit.update(bucket_exit[k])
+        btc_ask_heavy_all = _gate_pack(all_net, all_r, all_exit)
+
+    return {
+        "gated_records": len(gated),
+        "non_gated_records": len(non_gated),
+        "gated_opened": len(opened_rows),
+        "gated_closed": len(closed_rows),
+        "gated_open_now": len(open_rows),
+        "by_bucket": by_bucket,
+        "btc_ask_heavy": btc_ask_heavy,
+        "btc_ask_heavy_aggregate": btc_ask_heavy_all,
+    }
+
+
 def _summarize_fills(closed: list[dict]) -> dict:
     net = [float(row["fill"].get("net_return_pct", 0) or 0) for row in closed]
     pnl = [float(row["fill"].get("pnl_usd", 0) or 0) for row in closed]
@@ -262,6 +392,7 @@ def build_audit(data_dir: Path = DATA_DIR, *, recent_limit: int = 12) -> dict:
         "data_dir": str(data_dir),
         "decision_summary": _summarize_decisions(decisions),
         "fill_summary": _summarize_fills(closed),
+        "current_gate_only": _summarize_current_gate_only(position_rows),
         "opened_positions": len(opened),
         "open_now": len(open_now),
         "open_paper_ids": sorted(open_now),
@@ -310,6 +441,57 @@ def render_markdown(audit: dict) -> str:
         )
     if not fills["by_symbol"]:
         lines.append("- none")
+
+    # Current-gate-only section (per Slim 2026-08-05): positions with
+    # metadata.paper_gate set. Excludes legacy trades (no gate) and
+    # research-paper lanes (no v1 gate). Groups by (scope, symbol,
+    # lane, paper_gate) and highlights BTC ask_heavy specifically.
+    current = audit.get("current_gate_only", {})
+    lines.extend(["", "## Current Gate Only", ""])
+    lines.append(
+        f"- Gated records: {current.get('gated_records', 0)} "
+        f"(opened={current.get('gated_opened', 0)}, "
+        f"closed={current.get('gated_closed', 0)}, "
+        f"open_now={current.get('gated_open_now', 0)})"
+    )
+    lines.append(
+        f"- Non-gated records (legacy / research): {current.get('non_gated_records', 0)}"
+    )
+    btc_ah_agg = current.get("btc_ask_heavy_aggregate") or {}
+    if btc_ah_agg:
+        lines.append("")
+        lines.append("### BTC ask_heavy (aggregate across all current-gate buckets)")
+        lines.append(
+            f"- n={btc_ah_agg['n']}, WR={btc_ah_agg['win_rate_pct']}%, "
+            f"PF={btc_ah_agg['profit_factor']}, "
+            f"avg/med net={btc_ah_agg['avg_net_return_pct']}%/{btc_ah_agg['median_net_return_pct']}%, "
+            f"avg/med R={btc_ah_agg['avg_r_multiple']}/{btc_ah_agg['median_r_multiple']}"
+        )
+        if btc_ah_agg.get("exit_reasons"):
+            lines.append(
+                "- Exit reasons: " + ", ".join(
+                    f"{r}={c}" for r, c in btc_ah_agg["exit_reasons"].items()
+                )
+            )
+    lines.append("")
+    lines.append("### By bucket (scope|symbol|lane|gate)")
+    by_bucket = current.get("by_bucket", {})
+    if by_bucket:
+        for key, row in by_bucket.items():
+            lines.append(
+                f"- {key}: n={row['n']}, WR={row['win_rate_pct']}%, PF={row['profit_factor']}, "
+                f"avg/med net={row['avg_net_return_pct']}%/{row['median_net_return_pct']}%, "
+                f"avg/med R={row['avg_r_multiple']}/{row['median_r_multiple']}"
+            )
+            if row.get("exit_reasons"):
+                lines.append(
+                    f"    exits: " + ", ".join(
+                        f"{r}={c}" for r, c in row["exit_reasons"].items()
+                    )
+                )
+    else:
+        lines.append("- none")
+
     lines.extend(["", "## Top Reject Reasons", ""])
     for reason, count in decisions["top_reject_reasons"].items():
         lines.append(f"- {count}x: {reason}")
@@ -366,6 +548,8 @@ def main() -> int:
         "opened": audit["opened_positions"],
         "closed": audit["fill_summary"]["closed"],
         "open_now": audit["open_now"],
+        "gated_closed": audit["current_gate_only"]["gated_closed"],
+        "gated_btc_ask_heavy_n": audit["current_gate_only"]["btc_ask_heavy_aggregate"].get("n", 0),
         "anomalies": len(audit["anomalies"]),
         "legacy_warnings": len(audit["legacy_warnings"]),
     }, sort_keys=True))
