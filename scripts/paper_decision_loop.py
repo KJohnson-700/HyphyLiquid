@@ -37,13 +37,28 @@ LOG = logging.getLogger("paper_decision_loop")
 DATA_DIR = PROJECT_ROOT / "data"
 STATE_PATH = DATA_DIR / ".paper_decision_state.json"
 
-PAPER_SYMBOLS = {"BTC", "HYPE"}
+# Per Slim 2026-08-06: ETH joined the paper loop as a focused research
+# lane. OrderManager is still v1 (BTC/ETH execution scope unchanged);
+# ETH paper positions are tagged paper_scope="research_paper" so they
+# never reach the broker. The lane name is "eth_book_persistence_fade".
+PAPER_SYMBOLS = {"BTC", "ETH", "HYPE"}
 BTC_WAIT_MINUTES = 3
 BTC_MAX_HOLD_MINUTES = 240
 BTC_EVENT_VWAP_BUFFER_BPS = 15.0
 BTC_ACTIVATION_R = 2.0
 BTC_TRAIL_BPS = 10.0
 BTC_REQUIRED_IMBALANCE_BUCKET = "ask_heavy"
+
+# ETH book-persistence fade lane (research-only paper).
+# ETH B-side cascades with BBO ask_heavy at event time -> long fade
+# (5m horizon, 20bps initial stop, no trail). Execution is OFF
+# (research_paper scope). The 5m horizon mirrors the
+# ETH flow_amplifies_30s 5m pass (PF 2.01, n=30) from the
+# 2026-08-06 book-persistence backtest.
+ETH_REQUIRED_IMBALANCE_BUCKET = "ask_heavy"
+ETH_MAX_HOLD_MINUTES = 5
+ETH_STOP_BUFFER_BPS = 20.0
+ETH_WAIT_MINUTES = 1
 
 HYPE_MAX_HOLD_MINUTES = 15
 HYPE_STOP_BUFFER_BPS = 5.0
@@ -388,6 +403,148 @@ def _build_btc_position(
     )
 
 
+def _build_eth_position(
+    cascade: dict,
+    candles: list[dict],
+    entry_idx: int,
+    response_closes: Iterable[float],
+) -> tuple[PaperDecision, PaperPosition | None]:
+    """ETH book-persistence fade lane (research-only paper).
+
+    Slim 2026-08-06: ETH just earned a focused paper/research lane from
+    the book-persistence backtest (ETH flow_amplifies_30s 5m passed PF 2.01
+    n=30; ETH flow_amplifies_60s 15m passed PF 1.62 n=39).
+
+    Live entry rules (deterministic, replayable):
+      - Symbol: ETH
+      - Side: B (forced sells, fade = long)
+      - BBO ask_heavy at cascade time (top_book_imbalance < 0.45)
+      - Wait 1m for early reclaim; if reclaim happens, reject.
+      - Enter LONG at the end of the wait window.
+      - Stop: event_vwap * (1 - ETH_STOP_BUFFER_BPS / 1e4)
+      - Horizon: ETH_MAX_HOLD_MINUTES
+      - No trail (this is a 5m paper scalp; trail is BTC's domain)
+      - execution_allowed = False (research_paper scope only; OrderManager
+        v1 will not route to live).
+
+    The 30s/60s post-event trade-flow "amplifies" filter was the
+    backtest qualifier; the live paper loop uses the cascade-time
+    BBO ask_heavy filter as a deterministic proxy that does not
+    require waiting 30s. Future: wire real-time trade-flow check
+    (paper_decision_loop would need a pending-state pattern).
+    """
+    key = _cascade_key(cascade)
+    sym = str(cascade.get("symbol", "")).upper()
+    side = str(cascade.get("side", ""))
+    event_vwap = float(cascade.get("event_vwap", 0) or 0)
+    candle_regime = classify_candle_regime(candles, entry_idx)
+    response = classify_liquidation_response(side, event_vwap, response_closes, wait_minutes=ETH_WAIT_MINUTES)
+    route = route_signal(sym, side, candle_regime, response)
+    base = {
+        "decision_ts": _utc_now().isoformat(),
+        "cascade_key": key,
+        "symbol": sym,
+        "side": side,
+        "lane": route.lane,
+        "action": route.action,
+        "paper_scope": "research_paper" if route.action == "research_candidate" else "none",
+        "execution_allowed": route.execution_allowed,
+        "route_reason": route.reason,
+        "candle_regime": candle_regime.to_dict(),
+        "liquidation_response": response.to_dict(),
+    }
+    if route.action != "research_candidate" or route.lane != "eth_book_persistence_fade":
+        return PaperDecision(**base, decision="reject", reason=route.reason), None
+    if side != "B":
+        return PaperDecision(**base, decision="reject", reason="ETH paper/research lane is B-side only"), None
+    if response.reclaim_detected:
+        # Reclaim happened in wait window -> continuation thesis invalidated.
+        return PaperDecision(
+            **base,
+            decision="reject",
+            reason="ETH B-side cascade reclaimed through event_vwap, no continuation",
+        ), None
+
+    book_imbalance = imbalance_bucket(cascade.get("top_book_imbalance"))
+    if book_imbalance != ETH_REQUIRED_IMBALANCE_BUCKET:
+        return (
+            PaperDecision(
+                **base,
+                decision="reject",
+                reason=(
+                    "ETH paper gate requires "
+                    f"top_book_imbalance={ETH_REQUIRED_IMBALANCE_BUCKET}, got {book_imbalance}"
+                ),
+            ),
+            None,
+        )
+
+    # Enter at end of wait window (entry_idx + ETH_WAIT_MINUTES - 1)
+    trade_entry_idx = min(entry_idx + ETH_WAIT_MINUTES - 1, len(candles) - 1)
+    entry_price = _close(candles[trade_entry_idx])
+    if entry_price is None or entry_price <= 0:
+        return PaperDecision(**base, decision="reject", reason="missing ETH entry close"), None
+
+    direction = "long"  # ETH B-side cascade fade is always long
+    stop = event_vwap * (1.0 - ETH_STOP_BUFFER_BPS / 10_000.0)
+    if stop >= entry_price:
+        return PaperDecision(**base, decision="reject", reason="ETH event_vwap stop is not below long entry"), None
+    stop_bps = (entry_price - stop) / entry_price * 10_000.0
+    notional_usd, risk_usd = _paper_notional_for_stop(entry_price, stop)
+    verdict = _risk_verdict(sym, direction, notional_usd, risk_usd)
+    if verdict != RiskVerdict.APPROVED:
+        return PaperDecision(**base, decision="risk_reject", reason=verdict.value), None
+
+    paper_id = _paper_id(key, route.lane)
+    position = PaperPosition(
+        paper_id=paper_id,
+        paper_scope="research_paper",
+        cascade_key=key,
+        symbol=sym,
+        side=side,
+        lane=route.lane,
+        direction=direction,
+        event_ts=str(cascade.get("start_ts")),
+        entry_ts=_bar_dt(candles[trade_entry_idx]).isoformat(),
+        entry_idx=trade_entry_idx,
+        entry_price=round(entry_price, 8),
+        notional_usd=round(notional_usd, 4),
+        risk_usd=round(risk_usd, 4),
+        bracket=PaperBracket(
+            entry_price=round(entry_price, 8),
+            initial_stop_price=round(stop, 8),
+            target_price=None,
+            activation_price=None,
+            trail_bps=None,
+            max_hold_minutes=ETH_MAX_HOLD_MINUTES,
+            stop_slippage_bps=STOP_SLIPPAGE_BPS,
+            round_trip_cost_bps=ROUND_TRIP_COST_BPS,
+        ),
+        metadata={
+            "event_vwap": event_vwap,
+            "paper_gate": f"top_book_imbalance={ETH_REQUIRED_IMBALANCE_BUCKET}",
+            "top_book_imbalance": cascade.get("top_book_imbalance"),
+            "top_book_imbalance_bucket": book_imbalance,
+            "wait_minutes": ETH_WAIT_MINUTES,
+            "initial_stop_bps": round(stop_bps, 4),
+            "lane_basis": "eth_book_persistence_fade (research-only)",
+            "research_source": (
+                "ETH flow_amplifies_30s 5m PF=2.01 n=30 (book_persistence_filter "
+                "backtest 2026-08-06)"
+            ),
+        },
+    )
+    return (
+        PaperDecision(
+            **base,
+            decision="open_position",
+            reason=f"ETH B-side book-persistence fade with {book_imbalance} book",
+            paper_id=paper_id,
+        ),
+        position,
+    )
+
+
 def _build_hype_position(cascade: dict, candles: list[dict], entry_idx: int) -> tuple[PaperDecision, PaperPosition | None]:
     key = _cascade_key(cascade)
     sym = str(cascade.get("symbol", "")).upper()
@@ -481,6 +638,15 @@ def build_position_for_cascade(cascade: dict, candles_by_symbol: dict[str, list[
         if any(c is None for c in closes):
             return None, None
         return _build_btc_position(cascade, candles, entry_idx, [float(c) for c in closes if c is not None])
+    if sym == "ETH":
+        # ETH uses a 1-bar wait for early reclaim check; same pattern as BTC
+        needed = entry_idx + ETH_WAIT_MINUTES
+        if needed > len(candles):
+            return None, None
+        closes = [_close(c) for c in candles[entry_idx:needed]]
+        if any(c is None for c in closes):
+            return None, None
+        return _build_eth_position(cascade, candles, entry_idx, [float(c) for c in closes if c is not None])
     return _build_hype_position(cascade, candles, entry_idx)
 
 

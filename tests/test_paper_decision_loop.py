@@ -8,7 +8,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.paper_decision_loop import run_once  # noqa: E402
+from scripts.paper_decision_loop import (  # noqa: E402
+    ETH_MAX_HOLD_MINUTES,
+    ETH_REQUIRED_IMBALANCE_BUCKET,
+    ETH_STOP_BUFFER_BPS,
+    PAPER_SYMBOLS,
+    _build_eth_position,
+    build_position_for_cascade,
+    run_once,
+)
 from src.execution.paper_broker import PaperBracket, PaperPosition, mark_position  # noqa: E402
 
 
@@ -16,7 +24,7 @@ def _ms(ts: str) -> int:
     return int(datetime.fromisoformat(ts).timestamp() * 1000)
 
 
-def _bar(t_ms: int, c: float, h: float | None = None, l: float | None = None) -> dict:
+def _bar(t_ms: int, c: float, h: float | None = None, l: float | None = None, *, s: str = "BTC") -> dict:
     return {
         "t": t_ms,
         "T": t_ms + 59_999,
@@ -24,7 +32,7 @@ def _bar(t_ms: int, c: float, h: float | None = None, l: float | None = None) ->
         "h": str(h if h is not None else c + 0.01),
         "l": str(l if l is not None else c - 0.01),
         "c": str(c),
-        "s": "BTC",
+        "s": s,
         "i": "1m",
     }
 
@@ -159,7 +167,11 @@ class TestPaperDecisionLoop(unittest.TestCase):
         self.assertNotIn("import src.execution.order_manager", source)
         self.assertNotIn("src.exchange.hyperliquid", source)
 
-    def test_run_once_opens_and_marks_btc_and_hype_only(self):
+    def test_run_once_opens_and_marks_btc_eth_and_hype(self):
+        # Per Slim 2026-08-06: ETH joined the paper loop as a research-only
+        # lane. The synthetic ETH cascade below has no top_book_imbalance,
+        # so the ETH gate rejects (ask_heavy required). It still records a
+        # decision in paper_decisions so the lane's behaviour is auditable.
         with tempfile.TemporaryDirectory() as tmp:
             data_dir = Path(tmp)
             state_path = data_dir / ".paper_decision_state.json"
@@ -170,6 +182,10 @@ class TestPaperDecisionLoop(unittest.TestCase):
                 _bar(btc_base + 26 * 60_000, 106.4, h=106.5, l=106.3),
             ])
             _write_jsonl(data_dir / "ws_candle" / "btc_2026-08-04.jsonl", [{"payload": c} for c in btc_candles])
+
+            eth_base = _ms("2026-08-04T00:00:00+00:00")
+            eth_candles = [_bar(eth_base + i * 60_000, 100 + i * 0.2) for i in range(25)]
+            _write_jsonl(data_dir / "ws_candle" / "eth_2026-08-04.jsonl", [{"payload": c} for c in eth_candles])
 
             hype_base = _ms("2026-08-04T01:00:00+00:00")
             hype_closes = [100.0, 100.4, 100.0, 100.0] * 5
@@ -205,6 +221,7 @@ class TestPaperDecisionLoop(unittest.TestCase):
                     "event_vwap": 100,
                     "n_fills": 3,
                     "total_notional": 50000,
+                    # No top_book_imbalance: gate rejects
                 },
             ]
             _write_jsonl(data_dir / "cascades.jsonl", cascades)
@@ -218,9 +235,14 @@ class TestPaperDecisionLoop(unittest.TestCase):
             self.assertEqual(len(decisions), 1)
             self.assertEqual(len(positions), 1)
             decision_rows = [json.loads(line) for line in decisions[0].read_text(encoding="utf-8").splitlines()]
-            self.assertEqual({row["symbol"] for row in decision_rows}, {"BTC", "HYPE"})
+            # ETH now in PAPER_SYMBOLS -- its cascade gets a decision row,
+            # but the gate rejects (no top_book_imbalance set).
+            self.assertEqual({row["symbol"] for row in decision_rows}, {"BTC", "ETH", "HYPE"})
             self.assertIn("v1_paper", {row["paper_scope"] for row in decision_rows})
             self.assertIn("research_paper", {row["paper_scope"] for row in decision_rows})
+            eth_decision = next(r for r in decision_rows if r["symbol"] == "ETH")
+            self.assertEqual(eth_decision["decision"], "reject")
+            self.assertIn("top_book_imbalance=ask_heavy", eth_decision["reason"])
 
             second = run_once(data_dir=data_dir, state_path=state_path, max_new=10)
             self.assertEqual(second["positions_opened"], 0)
@@ -293,6 +315,180 @@ class TestPaperDecisionLoop(unittest.TestCase):
             self.assertEqual(len(rows), 2)
             self.assertIn("00:20:30", rows[0]["cascade_key"])
             self.assertIn("00:21:30", rows[1]["cascade_key"])
+
+
+class TestEthPaperLane(unittest.TestCase):
+    """Per Slim 2026-08-06: ETH just earned a focused paper/research lane.
+
+    The ETH lane is research-only: paper positions are tagged
+    paper_scope='research_paper', execution_allowed=False, and the
+    OrderManager v1 is still BTC/ETH execution scope (so ETH paper
+    trades never reach the live broker).
+    """
+
+    def test_eth_is_in_paper_symbols(self):
+        self.assertIn("ETH", PAPER_SYMBOLS)
+
+    def test_eth_constants_are_documented(self):
+        # The ETH lane is calibrated against the
+        # ETH flow_amplifies_30s 5m pass (PF 2.01 n=30) from the
+        # 2026-08-06 book-persistence backtest. Lock those knobs.
+        self.assertEqual(ETH_REQUIRED_IMBALANCE_BUCKET, "ask_heavy")
+        self.assertEqual(ETH_STOP_BUFFER_BPS, 20.0)
+        self.assertEqual(ETH_MAX_HOLD_MINUTES, 5)
+
+    def test_eth_b_side_continuation_opens_research_paper_position(self):
+        # Synthesize: ETH B-side cascade at 100, BBO ask_heavy, no reclaim
+        # in 1m wait. Long fade with 5m horizon.
+        # NB: imbalance_bucket uses a CENTERED convention (-1 ask_heavy,
+        # +1 bid_heavy, |x|<=0.25 balanced). Negative values mean ask_heavy,
+        # matching the BTC paper loop's gate (BTC_REQUIRED_IMBALANCE_BUCKET).
+        eth_base = _ms("2026-08-04T00:00:00+00:00")
+        # 1m candles climbing slightly (no reclaim through 100)
+        eth_candles = [_bar(eth_base + i * 60_000, 100.0 + 0.1 * i, s="ETH") for i in range(20)]
+        cascade = {
+            "symbol": "ETH",
+            "side": "B",
+            "start_ts": "2026-08-04T00:00:30+00:00",  # 30s into the hour
+            "event_vwap": 100.0,
+            "n_fills": 5,
+            "total_notional": 75000,
+            "top_book_imbalance": -0.5,  # ask_heavy (centered convention)
+        }
+
+        decision, position = build_position_for_cascade(
+            cascade, {"ETH": eth_candles}
+        )
+
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.decision, "open_position")
+        self.assertEqual(decision.lane, "eth_book_persistence_fade")
+        self.assertEqual(decision.paper_scope, "research_paper")
+        self.assertFalse(decision.execution_allowed)
+        self.assertIsNotNone(position)
+        self.assertEqual(position.symbol, "ETH")
+        self.assertEqual(position.side, "B")
+        self.assertEqual(position.direction, "long")
+        self.assertEqual(position.lane, "eth_book_persistence_fade")
+        self.assertEqual(position.paper_scope, "research_paper")
+        # Stop is event_vwap - 20bps
+        expected_stop = 100.0 * (1.0 - ETH_STOP_BUFFER_BPS / 10_000.0)
+        self.assertAlmostEqual(position.bracket.initial_stop_price, expected_stop, places=6)
+        self.assertEqual(position.bracket.max_hold_minutes, ETH_MAX_HOLD_MINUTES)
+        self.assertIsNone(position.bracket.trail_bps)
+        self.assertIsNone(position.bracket.target_price)
+        # Metadata must record the gate
+        self.assertIn("paper_gate", position.metadata)
+        self.assertIn("ask_heavy", position.metadata["paper_gate"])
+        self.assertIn("research_source", position.metadata)
+
+    def test_eth_rejects_when_top_book_imbalance_not_ask_heavy(self):
+        # Centered convention: +0.5 is bid_heavy -> gate rejects.
+        eth_base = _ms("2026-08-04T00:00:00+00:00")
+        eth_candles = [_bar(eth_base + i * 60_000, 100.0 + 0.1 * i, s="ETH") for i in range(20)]
+        cascade = {
+            "symbol": "ETH",
+            "side": "B",
+            "start_ts": "2026-08-04T00:00:30+00:00",
+            "event_vwap": 100.0,
+            "n_fills": 5,
+            "total_notional": 75000,
+            "top_book_imbalance": 0.5,  # bid_heavy (centered), gate rejects
+        }
+
+        decision, position = build_position_for_cascade(
+            cascade, {"ETH": eth_candles}
+        )
+
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.decision, "reject")
+        self.assertIn("top_book_imbalance=ask_heavy", decision.reason)
+        self.assertIsNone(position)
+
+    def test_eth_rejects_when_reclaim_happens(self):
+        # B-side cascade pushed price up; if a 1m bar closes < vwap, the
+        # continuation thesis is invalidated. The regime route catches it
+        # first (action="watch" with reason mentioning reclaim), and the
+        # position builder never reaches the book gate.
+        eth_base = _ms("2026-08-04T00:00:00+00:00")
+        # entry bar at 100, next bar 99 (reclaim)
+        eth_candles = [
+            _bar(eth_base, 100.5, s="ETH"),
+            _bar(eth_base + 60_000, 99.0, s="ETH"),  # reclaim
+        ] + [_bar(eth_base + (i + 2) * 60_000, 100.0, s="ETH") for i in range(20)]
+        cascade = {
+            "symbol": "ETH",
+            "side": "B",
+            "start_ts": "2026-08-04T00:00:30+00:00",
+            "event_vwap": 100.0,
+            "n_fills": 5,
+            "total_notional": 75000,
+            "top_book_imbalance": -0.5,  # ask_heavy
+        }
+
+        decision, position = build_position_for_cascade(
+            cascade, {"ETH": eth_candles}
+        )
+
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.decision, "reject")
+        # Either the regime route or the position builder catches the reclaim
+        self.assertTrue(
+            "reclaim" in decision.reason.lower(),
+            f"expected reclaim-related reason, got: {decision.reason!r}",
+        )
+        self.assertIsNone(position)
+
+    def test_eth_rejects_a_side_cascades(self):
+        # A-side cascades are not in the current lane (collect_only).
+        eth_base = _ms("2026-08-04T00:00:00+00:00")
+        eth_candles = [_bar(eth_base + i * 60_000, 100.0 + 0.1 * i, s="ETH") for i in range(20)]
+        cascade = {
+            "symbol": "ETH",
+            "side": "A",
+            "start_ts": "2026-08-04T00:00:30+00:00",
+            "event_vwap": 100.0,
+            "n_fills": 5,
+            "total_notional": 75000,
+            "top_book_imbalance": -0.5,
+        }
+
+        decision, position = build_position_for_cascade(
+            cascade, {"ETH": eth_candles}
+        )
+
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.decision, "reject")
+        self.assertIsNone(position)
+
+    def test_eth_bracket_sizing_uses_risk_module(self):
+        # Position sizing: notional = min(MAX_NOTIONAL, target_risk / stop_distance)
+        # Stop is event_vwap * (1 - 20bps/10000) = 99.8 (event_vwap=100, ETH_STOP_BUFFER_BPS=20).
+        # Entry is candle[1].c = 100.1. Stop distance = 100.1 - 99.8 = 0.3.
+        # stop_pct = 0.3 / 100.1 ≈ 0.002997
+        # notional = 10 / 0.002997 ≈ 3337
+        # risk = 3337 * 0.002997 ≈ 10
+        eth_base = _ms("2026-08-04T00:00:00+00:00")
+        eth_candles = [_bar(eth_base + i * 60_000, 100.0 + 0.1 * i, s="ETH") for i in range(20)]
+        cascade = {
+            "symbol": "ETH",
+            "side": "B",
+            "start_ts": "2026-08-04T00:00:30+00:00",
+            "event_vwap": 100.0,
+            "n_fills": 5,
+            "total_notional": 75000,
+            "top_book_imbalance": -0.5,
+        }
+
+        _, position = build_position_for_cascade(cascade, {"ETH": eth_candles})
+
+        self.assertIsNotNone(position)
+        # Entry at candle[1] (00:01:00) = 100.1; stop = 99.8; stop_pct ≈ 0.003
+        # notional = 10 / 0.003 = ~3333
+        self.assertGreater(position.notional_usd, 3000.0)
+        self.assertLess(position.notional_usd, 4000.0)
+        # Risk ≈ 10
+        self.assertAlmostEqual(position.risk_usd, 10.0, places=1)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,42 @@
 
 ---
 
+## 2026-08-06 - BTC ask-heavy × failed-reclaim JOIN backtest + ETH paper/research lane
+
+Per Slim 2026-08-06: "BTC ask-heavy needs a more specific failed-reclaim join, not generic book persistence. ETH just earned a focused paper/research lane."
+
+**What changed**
+- New `scripts/run_btc_ask_heavy_reclaim_join.py` (~30KB) — per-event BTC/ETH backtest of the JOIN: cascade-time BBO ask_heavy AND standard failed_reclaim_continuation. Compares against `generic_failed_reclaim_continuation` (control) and sister buckets (`ask_heavy_AND_always_fade`, `ask_heavy_AND_always_follow`, `bid_heavy_AND_failed_reclaim_continuation`) so the value of the join is visible
+- New `tests/test_btc_ask_heavy_reclaim_join.py` — 34/34 tests passing. Covers: BBO bucket classification, reclaim detection, entry/exit extraction, trade-record PnL math (cost in bps), promotion gate, per-bucket aggregation, per-cascade processor populates the right buckets, end-to-end main() on synthetic data
+- New `data/btc_ask_heavy_reclaim_join_results.json` + `_summary.md` — first honest read on real data
+- `scripts/run_rebuild_cycle.py` — added `BTC_ASK_HEAVY_RECLAIM_JOIN_CMD` as 16th best-effort command (post-cycle, doesn't block baseline)
+- `src/strategy/regime.py` — added `eth_book_persistence_fade` lane. ETH B-side failed-reclaim continuation is now a `research_candidate` (paper-routable, NOT live). ETH B-side with reclaim is `watch` (paper logs only). ETH A-side is `collect_only`. `execution_allowed=False` for all ETH paths — OrderManager v1 is still BTC/ETH execution scope, but ETH paper is research-only
+- `scripts/paper_decision_loop.py`:
+  - `PAPER_SYMBOLS` now `{"BTC", "ETH", "HYPE"}` (was `{"BTC", "HYPE"}`)
+  - New constants: `ETH_REQUIRED_IMBALANCE_BUCKET="ask_heavy"`, `ETH_MAX_HOLD_MINUTES=5`, `ETH_STOP_BUFFER_BPS=20.0`, `ETH_WAIT_MINUTES=1`
+  - New `_build_eth_position` function: ETH B-side cascade + BBO ask_heavy + no reclaim (1m wait) → enter long at wait bar, stop at event_vwap - 20bps, 5m horizon, no trail
+  - `build_position_for_cascade` routes ETH to `_build_eth_position`
+  - Paper scope is `research_paper` (vs BTC's `v1_paper`); execution is OFF (`execution_allowed=False`)
+- `tests/test_paper_decision_loop.py`:
+  - Updated `test_run_once_opens_and_marks_btc_and_hype_only` → `test_run_once_opens_and_marks_btc_eth_and_hype` (now exercises ETH in PAPER_SYMBOLS)
+  - New `TestEthPaperLane` class with 7 tests covering: ETH in PAPER_SYMBOLS, constants documented, B-side continuation opens research_paper position, ask_heavy gate rejects non-ask-heavy, reclaim in wait window rejects, A-side cascades rejected, bracket sizing uses risk module
+- `tests/test_regime.py`:
+  - Replaced `test_eth_rejects_until_new_framing_passes` with three new tests: `test_eth_b_side_continuation_is_research_candidate_per_slim_2026_08_06`, `test_eth_b_side_reclaim_watch_only`, `test_eth_a_side_collect_only`
+
+**First honest read on real data (2026-08-06)**
+- BTC ask-heavy × failed-reclaim JOIN: **all buckets fail the promotion gate**. BTC B ask_heavy_AND_failed_reclaim_continuation: n=58, WR 20.7%, PF **0.27**, med -0.0929%, top 21.1%
+- vs BTC B generic_failed_reclaim_continuation (control): n=97, PF 0.16 — the join is slightly less negative than generic, but both fail; both have negative median returns
+- BTC ask_heavy alone (always_fade): n=211, PF 0.14. always_follow: n=211, PF 0.28. BBO filter alone is not enough
+- BTC bid_heavy × failed_reclaim: n=36, PF 0.03 (terrible)
+- ETH B ask_heavy × failed_reclaim: n=54, PF 0.26 (also negative)
+- **Per the standing rule, do not propose a re-tune.** The BBO filter adds a tiny absolute uplift to BTC B (PF 0.16 → 0.27) but both are below 1.5 and both are negative. The decay continues. Don't keep re-evaluating simple rules on more data without a new filter/feature.
+
+**Test count after this commit**: 437/437 passing (was 394 before). Net delta: +43 (34 BTC ask-heavy + 7 ETH lane + 1 paper loop update + 1 regime update).
+
+**Hard scope held**: zero changes to execution, order_manager, risk.py, or live/paper routing beyond the new ETH research-paper lane (which is paper-only by design — no OrderManager touch).
+
+---
+
 ## 2026-08-06 - Add book-persistence / stale-book / trade-flow filter backtest
 
 Per Slim's 2026-08-06 spec. BTC/ETH only. Research-only backtest that adds three new context filters to the cascade-fade playbook. Hard scope: no execution, no risk.py, no order_manager changes.

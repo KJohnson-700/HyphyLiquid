@@ -1,6 +1,6 @@
 """Run the cascade-rebuild + backtest cycle and update the baseline.
 
-Wraps the fourteen scripts Slim specified:
+Wraps the fifteen scripts Slim specified:
   scripts/build_cascades.py              --time-window 60 --max-snapshot-lag 120
   scripts/run_fade_or_follow_backtest.py --horizon 15 --wait 3 --max-entry-lag 2
   scripts/run_lane_backtest.py           --lane btc_eth_fade_or_follow
@@ -21,6 +21,8 @@ Wraps the fourteen scripts Slim specified:
   scripts/run_paper_audit.py             (paper ledger trust report)
   scripts/check_sol_h1_watch.py          (SOL H1 strict-decision-rule watch,
                                           research-only; per Slim 2026-08-05)
+  scripts/run_btc_ask_heavy_reclaim_join.py  (BTC ask-heavy x failed-reclaim JOIN,
+                                          research-only; per Slim 2026-08-06)
 
 The first two are the v1 main pipeline and must both succeed before the
 baseline is updated. The subsequent runs (two lane sweeps + two
@@ -135,6 +137,7 @@ REGIME_SUMMARY_CMD = [PYTHON, "scripts/run_regime_summary.py"]
 PAPER_DECISION_CMD = [PYTHON, "scripts/paper_decision_loop.py", "--once", "--max-new", "500"]
 PAPER_AUDIT_CMD = [PYTHON, "scripts/run_paper_audit.py"]
 SOL_H1_WATCH_CMD = [PYTHON, "scripts/check_sol_h1_watch.py"]
+BTC_ASK_HEAVY_RECLAIM_JOIN_CMD = [PYTHON, "scripts/run_btc_ask_heavy_reclaim_join.py"]
 ALL_CMDS = [
     BUILD_CMD,
     BACKTEST_CMD,
@@ -151,6 +154,7 @@ ALL_CMDS = [
     PAPER_DECISION_CMD,
     PAPER_AUDIT_CMD,
     SOL_H1_WATCH_CMD,
+    BTC_ASK_HEAVY_RECLAIM_JOIN_CMD,
 ]
 
 # Threshold alerts (per Slim's operating rules, 2026-08-03)
@@ -515,6 +519,14 @@ def main() -> int:
             print(f"  WARNING: SOL H1 watch exited {rc_shw}; baseline will still update.")
         else:
             print("  SOL H1 watch ok.")
+
+        # --- BTC ask-heavy x failed-reclaim JOIN (best-effort, research-only) ---
+        rc_bah = _run(BTC_ASK_HEAVY_RECLAIM_JOIN_CMD)
+        if rc_bah != 0:
+            lane_failures.append((" ".join(BTC_ASK_HEAVY_RECLAIM_JOIN_CMD[1:]), rc_bah))
+            print(f"  WARNING: BTC ask-heavy JOIN exited {rc_bah}; baseline will still update.")
+        else:
+            print("  BTC ask-heavy JOIN ok.")
 
     print("\n>>> Main pipeline succeeded. Updating baseline.")
     payload = update_baseline()

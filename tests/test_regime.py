@@ -133,7 +133,11 @@ class TestRegimeRouting(unittest.TestCase):
         self.assertEqual(route.action, "reject")
         self.assertFalse(route.execution_allowed)
 
-    def test_eth_rejects_until_new_framing_passes(self):
+    def test_eth_b_side_continuation_is_research_candidate_per_slim_2026_08_06(self):
+        # Per Slim 2026-08-06: ETH B-side failed-reclaim continuation is now
+        # a research_candidate in the eth_book_persistence_fade lane.
+        # execution_allowed stays False (research_paper scope only; OrderManager
+        # v1 is still BTC/ETH execution scope, but ETH paper is research-only).
         candle = classify_candle_regime(
             [_bar(_ms("2026-08-03T00:00:00+00:00") + i * 60000, c=100 + i * 0.1) for i in range(21)],
             20,
@@ -143,8 +147,40 @@ class TestRegimeRouting(unittest.TestCase):
 
         route = route_signal("ETH", "B", candle, response)
 
-        self.assertEqual(route.action, "reject")
-        self.assertTrue(route.execution_allowed)
+        self.assertEqual(route.action, "research_candidate")
+        self.assertEqual(route.lane, "eth_book_persistence_fade")
+        self.assertFalse(route.execution_allowed)
+
+    def test_eth_b_side_reclaim_watch_only(self):
+        # ETH B-side with reclaim in wait window -> watch (paper logs only,
+        # no position opened; reclaim invalidates continuation thesis).
+        candle = classify_candle_regime(
+            [_bar(_ms("2026-08-03T00:00:00+00:00") + i * 60000, c=100 + i * 0.1) for i in range(21)],
+            20,
+            high_atr_pct=10.0,
+        )
+        response = classify_liquidation_response("B", 100.0, [99.5])  # reclaim (B-side)
+
+        route = route_signal("ETH", "B", candle, response)
+
+        self.assertEqual(route.action, "watch")
+        self.assertEqual(route.lane, "eth_book_persistence_fade")
+        self.assertFalse(route.execution_allowed)
+
+    def test_eth_a_side_collect_only(self):
+        # ETH A-side cascades are not in the current lane; collect only.
+        candle = classify_candle_regime(
+            [_bar(_ms("2026-08-03T00:00:00+00:00") + i * 60000, c=100 + i * 0.1) for i in range(21)],
+            20,
+            high_atr_pct=10.0,
+        )
+        response = classify_liquidation_response("A", 100.0, [98.5])  # A-side failed-reclaim
+
+        route = route_signal("ETH", "A", candle, response)
+
+        self.assertEqual(route.action, "collect_only")
+        self.assertEqual(route.lane, "eth_book_persistence_fade")
+        self.assertFalse(route.execution_allowed)
 
 
 if __name__ == "__main__":
