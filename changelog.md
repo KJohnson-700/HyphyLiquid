@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-08-07 - Add Tier-1 context filter backtest
+
+Codex implemented the first research sweep from the liquidation-filter shortlist: funding Z-score, OI/price regime, and cascade cooldown.
+
+**What changed**
+- New `scripts/run_context_filter_backtest.py` computes per-cascade context features from existing `data/asset_ctx`, `data/ws_candle`, and `data/cascades.jsonl`.
+- New `tests/test_context_filter_backtest.py` covers funding Z-score buckets, OI/price regime labels, cooldown buckets, per-bucket stats, and promotion gates.
+- `scripts/run_rebuild_cycle.py` now runs the context sweep as a best-effort research command.
+- New project note: `docs/2026-08-07-RESEARCH-context-filter-backtest.md`.
+
+**First result**
+- All-symbol sweep: 2,309 feature rows, 6,664 bucket verdicts, 9 passed buckets.
+- BTC: no passing bucket.
+- ETH: side=A follow 60m when funding Z-score is positively elevated passed (n=38, PF 1.68, median +0.0780%).
+- HYPE: several OI/price and cooldown context buckets passed; strongest was side=A fade 60m with price_down_oi_down (n=35, PF 3.54, median +0.1301%).
+- SOL: one cooldown bucket barely passed, but median was near zero.
+
+**Decision**
+- This is a genuine new context feature, not a retune of the old cascade rule.
+- Do not promote live execution from this alone.
+- Next priority: paper/probe ETH side=A follow 60m funding-positive context, keep HYPE research-only context experiments, and build Tier-2 L2 depth features for BTC (OBI/OFI/book resilience).
+
+**Verification**
+- `python -m py_compile scripts/run_context_filter_backtest.py tests/test_context_filter_backtest.py`
+- `python -m unittest tests.test_context_filter_backtest -v` -> 8/8 passing
+- `scripts/run_context_filter_backtest.py --symbols BTC,ETH,SOL,HYPE,DOGE,BNB --horizons 5,15,30,60` -> completed in ~23s.
+
+---
+
 ## 2026-08-06 - Add execution canary and paper-to-live bracket intent
 
 Codex moved the build path from research-only loops toward tomorrow's execution-grade canary.

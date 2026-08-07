@@ -23,6 +23,8 @@ Wraps the fifteen scripts Slim specified:
                                           research-only; per Slim 2026-08-05)
   scripts/run_btc_ask_heavy_reclaim_join.py  (BTC ask-heavy x failed-reclaim JOIN,
                                           research-only; per Slim 2026-08-06)
+  scripts/run_context_filter_backtest.py (funding Z-score, OI/price regime,
+                                          cooldown buckets; research-only)
 
 The first two are the v1 main pipeline and must both succeed before the
 baseline is updated. The subsequent runs (two lane sweeps + two
@@ -138,6 +140,14 @@ PAPER_DECISION_CMD = [PYTHON, "scripts/paper_decision_loop.py", "--once", "--max
 PAPER_AUDIT_CMD = [PYTHON, "scripts/run_paper_audit.py"]
 SOL_H1_WATCH_CMD = [PYTHON, "scripts/check_sol_h1_watch.py"]
 BTC_ASK_HEAVY_RECLAIM_JOIN_CMD = [PYTHON, "scripts/run_btc_ask_heavy_reclaim_join.py"]
+CONTEXT_FILTER_CMD = [
+    PYTHON,
+    "scripts/run_context_filter_backtest.py",
+    "--symbols",
+    "BTC,ETH,SOL,HYPE,DOGE,BNB",
+    "--horizons",
+    "5,15,30,60",
+]
 ALL_CMDS = [
     BUILD_CMD,
     BACKTEST_CMD,
@@ -155,6 +165,7 @@ ALL_CMDS = [
     PAPER_AUDIT_CMD,
     SOL_H1_WATCH_CMD,
     BTC_ASK_HEAVY_RECLAIM_JOIN_CMD,
+    CONTEXT_FILTER_CMD,
 ]
 
 # Threshold alerts (per Slim's operating rules, 2026-08-03)
@@ -527,6 +538,14 @@ def main() -> int:
             print(f"  WARNING: BTC ask-heavy JOIN exited {rc_bah}; baseline will still update.")
         else:
             print("  BTC ask-heavy JOIN ok.")
+
+        # --- Tier-1 context filters (best-effort, research-only) ---
+        rc_cf = _run(CONTEXT_FILTER_CMD)
+        if rc_cf != 0:
+            lane_failures.append((" ".join(CONTEXT_FILTER_CMD[1:]), rc_cf))
+            print(f"  WARNING: context filter backtest exited {rc_cf}; baseline will still update.")
+        else:
+            print("  context filter backtest ok.")
 
     print("\n>>> Main pipeline succeeded. Updating baseline.")
     payload = update_baseline()
