@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-08-07 - Add Tier-2 L2 depth feature pipeline (OBI, OFI, stale, lag)
+
+Marvis built the first half of the Tier-2 shortlist per Slim's 2026-08-07 directive: per-event depth features from the raw l2book WS feed.
+
+**What changed**
+- New `scripts/build_l2_depth_features.py` stream-reads `data/ws_l2book/{symbol}_{YYYY-MM-DD}.jsonl` and writes `data/l2_depth_features/{symbol}_{YYYY-MM-DD}.jsonl` with derived features for downstream cascade analysis.
+- New `tests/test_build_l2_depth_features.py` covers the math helpers, SymbolState windowed-OFI + stale-book logic, event parsing, filename date extraction, date range filtering, and end-to-end stream processing on synthetic data. 66/66 tests passing.
+- Per-event features computed: `mid`, `spread_bps`, `lag_ms` (recv - ts), `stale_book_flag`, `mid_drift_bps`, `depth_topN_{bid,ask}` for N in {1, 5, 10, 20}, `obi_N` for N in {1, 5, 10, 20}, `ofi_N_instant` for N in {5, 10}, `ofi_{N}_{window_s}s` for N in {5, 10} and window in {5, 30}.
+- Stream-processing: per-symbol stateful (O(1) prev + O(window_size) deques), never loads the full input file.
+- `payload.time` (HL exchange clock) is the join key per Slim 2026-08-07 directive; `recv_ts` is retained for stale/lag diagnostics only.
+- BTC/ETH/SOL only per Slim 2026-08-07 (HYPE has no l2 data; HIP-3 assets excluded).
+- Stale book flag: `spread > 1.5x rolling 5min median AND mid drift over 5min < 1 bps`.
+- All math has divide-by-zero guards: empty book → OBI=0, no mid → spread_bps=0, no prev → OFI=0, no history → stale=False, no window → windowed OFI=0.
+
+**Verification**
+- `python -m pytest tests/test_build_l2_depth_features.py -v` -> 66/66 passing
+- `python -m pytest tests` -> 522/523 passing (1 unrelated pre-existing failure in test_order_manager.py REJECTED_RISK_PCT vs REJECTED_LEVERAGE assertion)
+- Smoke test: BTC 2026-08-06, 23,247 input events → 23,247 features written, 0 bad/empty
+- Smoke test: BTC+ETH+SOL 2026-08-02..08-08, 19 of 21 files processed (SOL 8/6-8/7 still in progress at 120s timeout), 257MB output, 0 bad/empty skipped
+
+**Next steps (Tier-2 follow-ons)**
+- `scripts/build_l2_cascade_features.py` to JOIN l2 features with `data/cascades.jsonl` at cascade_time, t-30s, t+5s, t+30s, t+60s. Compute pre-cascade thinning + post-cascade resilience.
+- `scripts/run_depth_obi_filter.py` to backtest per-bucket OBI/OFI/thinning/resilience filters against cascade outcomes. Same promotion gate as book-persistence (n>=30, PF>1.5, med>0, top<=35%).
+- Wire into `scripts/run_rebuild_cycle.py` as a best-effort 17th command (post-pipeline).
+- Vault research note documenting first results.
+
+---
+
 ## 2026-08-07 - Add Tier-1 context filter backtest
 
 Codex implemented the first research sweep from the liquidation-filter shortlist: funding Z-score, OI/price regime, and cascade cooldown.
