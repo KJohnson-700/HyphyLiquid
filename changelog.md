@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-08-08 - Keep asset-context poller alive on predicted-funding 502s
+
+Codex fixed the recurring `poll_asset_ctx.py` daemon death seen around the 02:00 PT tick.
+
+**What changed**
+- `scripts/poll_asset_ctx.py` now treats `predictedFundings` as optional per cycle.
+- A transient Hyperliquid `502 Bad Gateway` from the predicted-funding endpoint is logged and replaced with an empty predicted-funding map for that cycle instead of terminating the daemon.
+- Mark price, OI, funding, native symbols, and HIP-3 asset-context polling continue to run even when predicted funding is temporarily unavailable.
+
+**Why**
+- The crash log showed `requests.exceptions.HTTPError: 502 Server Error` from `fetch_predicted()` outside the poller's guarded native/HIP-3 fetch blocks.
+- This was the likely cause of the repeat ~24h `poll_asset_ctx.py` death.
+
+---
+
 ## 2026-08-07 - Add Tier-2 L2 depth feature pipeline (OBI, OFI, stale, lag)
 
 Marvis built the first half of the Tier-2 shortlist per Slim's 2026-08-07 directive: per-event depth features from the raw l2book WS feed.

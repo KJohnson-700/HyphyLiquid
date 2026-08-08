@@ -78,7 +78,11 @@ def main() -> int:
     while True:
         cycle_ts = datetime.now(timezone.utc)
         date_str = cycle_ts.strftime("%Y-%m-%d")
-        predicted_all = fetch_predicted()
+        try:
+            predicted_all = fetch_predicted()
+        except Exception as e:
+            predicted_all = []
+            print(f"  predicted funding fetch error: {e}", flush=True)
         predicted_by_coin = _by_coin(predicted_all)
 
         # Native (default) universe
