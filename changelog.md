@@ -4,6 +4,33 @@
 
 ---
 
+## 2026-08-09 - Narrow active paper lane to ETH funding-context follow
+
+Codex narrowed the active v1 paper path to the strongest current v1-eligible bucket instead of continuing broad simulation churn.
+
+**What changed**
+- `src/strategy/regime.py` now routes ETH side=A post-liquidation continuation into `eth_funding_context_follow`.
+- `scripts/paper_decision_loop.py` now opens ETH v1-paper positions only when `funding_z_bucket == funding_pos_elevated`, matching the latest Tier-1 context result: ETH side=A follow 60m, n=58, PF=1.5661, median +0.0760%, top-win share 9.52%.
+- New `scripts/run_eth_follow_canary.py` isolates the same ETH bucket into a tagged canary report without polluting the broader paper ledgers.
+- The older ETH B-side book-persistence lane is retired from new paper opens after negative forward paper performance.
+- ETH funding-context paper positions are short-only, use a 1m wait, a 35 bps event-VWAP stop, no target/trail on the first pass, and a 60m max hold to mirror the measured context-filter horizon.
+- Removed the 478MB ETH `ws_trades` hot-loop load from `paper_decision_loop.py`; the new ETH lane does not need trade-flow data.
+- Updated `tests/test_paper_decision_loop.py`, `tests/test_regime.py`, and added `tests/test_run_eth_follow_canary.py`.
+
+**Verification**
+- `python -m pytest tests/test_paper_decision_loop.py -q` -> 15/15 passing
+- `python -m pytest tests/test_paper_decision_loop.py tests/test_regime.py -q` -> 27/27 passing
+- `python -m pytest tests/test_run_eth_follow_canary.py -q` -> 40/40 passing
+- `python -m py_compile scripts/paper_decision_loop.py src/strategy/regime.py tests/test_paper_decision_loop.py`
+- `scripts/paper_decision_loop.py --once --max-new 500` completed after the trade-load removal; no new unprocessed decisions were available in that pass.
+- `scripts/run_eth_follow_canary.py` -> PASS: n=60, PF=1.75, WR=61.67%, avg/med +0.0597%/+0.0791%, top-win share 8.52%.
+- `scripts/run_paper_audit.py` -> 0 anomalies, 67 opened/closed historical paper fills, open_now=0.
+
+**Decision**
+- Stop treating old broad paper performance as the strategy answer. The immediate candidate is now `ETH side=A follow 60m funding_pos_elevated`; BTC B-side continues accumulating untouched.
+
+---
+
 ## 2026-08-08 - Add Tier-2 L2 cascade-feature joiner and depth/OBI/OFI filter backtest
 
 Marvis built the second half of the Tier-2 shortlist per Slim's 2026-08-07 directive: cascade joiner + L2-driven filter backtest.

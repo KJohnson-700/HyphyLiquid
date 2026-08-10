@@ -32,6 +32,7 @@ from src.strategy.fade_or_follow_backtest import (
 from src.strategy.filter_diagnostics import imbalance_bucket
 from src.strategy.lane_backtest import _range_confirmation, bollinger_at
 from src.strategy.regime import classify_candle_regime, classify_liquidation_response, route_signal
+from scripts.run_context_filter_backtest import compute_context_features, _load_asset_ctx
 
 LOG = logging.getLogger("paper_decision_loop")
 
@@ -50,16 +51,15 @@ BTC_ACTIVATION_R = 2.0
 BTC_TRAIL_BPS = 10.0
 BTC_REQUIRED_IMBALANCE_BUCKET = "ask_heavy"
 
-# ETH book-persistence fade lane (research-only paper).
-# ETH B-side cascades with BBO ask_heavy at event time AND 30s post-event
-# trade flow that amplifies the cascade -> long fade. Execution is OFF
-# (research_paper scope). This mirrors the ETH flow_amplifies_30s 5m pass
-# (PF 2.01, n=30) from the 2026-08-06 book-persistence backtest.
+# ETH funding-context follow lane (v1 paper).
+# Current strongest v1-eligible candidate from the Tier-1 context sweep:
+# ETH side=A follow 60m when funding_z is positive/elevated.
 ETH_REQUIRED_IMBALANCE_BUCKET = "ask_heavy"
 ETH_REQUIRED_FLOW_LABEL = "amplifies"
 ETH_FLOW_WINDOW_SECONDS = 30
-ETH_MAX_HOLD_MINUTES = 5
-ETH_STOP_BUFFER_BPS = 20.0
+ETH_REQUIRED_FUNDING_BUCKET = "funding_pos_elevated"
+ETH_MAX_HOLD_MINUTES = 60
+ETH_STOP_BUFFER_BPS = 35.0
 ETH_WAIT_MINUTES = 1
 
 HYPE_MAX_HOLD_MINUTES = 15
@@ -441,7 +441,7 @@ def _build_btc_position(
     stop = event_vwap * (1.0 - BTC_EVENT_VWAP_BUFFER_BPS / 10_000.0)
     if stop >= entry_price:
         return PaperDecision(**base, decision="reject", reason="event_vwap stop is not below long entry"), None
-    stop_bps = (entry_price - stop) / entry_price * 10_000.0
+    stop_bps = abs(entry_price - stop) / entry_price * 10_000.0
     activation = _price_with_bps(entry_price, direction, stop_bps * BTC_ACTIVATION_R)
     notional_usd, risk_usd = _paper_notional_for_stop(entry_price, stop)
     verdict = _risk_verdict(sym, direction, notional_usd, risk_usd)
@@ -499,31 +499,23 @@ def _build_eth_position(
     candles: list[dict],
     entry_idx: int,
     response_closes: Iterable[float],
-    flow_label_30s: str,
-    flow_stats_30s: dict,
+    flow_label_30s: str = "not_used",
+    flow_stats_30s: dict | None = None,
+    ctx_rows: list[dict] | None = None,
 ) -> tuple[PaperDecision, PaperPosition | None]:
-    """ETH book-persistence fade lane (research-only paper).
-
-    Slim 2026-08-06: ETH just earned a focused paper/research lane from
-    the book-persistence backtest (ETH flow_amplifies_30s 5m passed PF 2.01
-    n=30; ETH flow_amplifies_60s 15m passed PF 1.62 n=39).
+    """ETH funding-context follow lane (v1 paper).
 
     Live entry rules (deterministic, replayable):
       - Symbol: ETH
-      - Side: B (forced sells, fade = long)
-      - BBO ask_heavy at cascade time (top_book_imbalance < 0.45)
-      - 30s post-event trade flow amplifies the cascade
-      - Wait 1m for early reclaim; if reclaim happens, reject.
-      - Enter LONG at the end of the wait window.
-      - Stop: event_vwap * (1 - ETH_STOP_BUFFER_BPS / 1e4)
+      - Side: A (forced buys, follow = short)
+      - Funding Z bucket: funding_pos_elevated
+      - Wait 1m for early reclaim; if reclaim happens, reject
+      - Enter SHORT at the end of the wait window
+      - Stop: event_vwap * (1 + ETH_STOP_BUFFER_BPS / 1e4)
       - Horizon: ETH_MAX_HOLD_MINUTES
-      - No trail (this is a 5m paper scalp; trail is BTC's domain)
-      - execution_allowed = False (research_paper scope only; OrderManager
-        v1 will not route to live).
-
-    The 30s post-event trade-flow "amplifies" filter is required here
-    because that was the actual passing backtest condition. BBO ask_heavy
-    alone was only a proxy and failed in paper.
+      - No target and no trail on the first pass; this mirrors the 60m
+        context-filter measurement and lets live-like paper expose the real
+        stop/hold behavior.
     """
     key = _cascade_key(cascade)
     sym = str(cascade.get("symbol", "")).upper()
@@ -539,45 +531,32 @@ def _build_eth_position(
         "side": side,
         "lane": route.lane,
         "action": route.action,
-        "paper_scope": "research_paper" if route.action == "research_candidate" else "none",
+        "paper_scope": "v1_paper" if route.execution_allowed and route.action == "watch" else "none",
         "execution_allowed": route.execution_allowed,
         "route_reason": route.reason,
         "candle_regime": candle_regime.to_dict(),
         "liquidation_response": response.to_dict(),
     }
-    if route.action != "research_candidate" or route.lane != "eth_book_persistence_fade":
+    if route.action != "watch" or route.lane != "eth_funding_context_follow":
         return PaperDecision(**base, decision="reject", reason=route.reason), None
-    if side != "B":
-        return PaperDecision(**base, decision="reject", reason="ETH paper/research lane is B-side only"), None
+    if side != "A":
+        return PaperDecision(**base, decision="reject", reason="ETH funding-context paper lane is A-side only"), None
     if response.reclaim_detected:
-        # Reclaim happened in wait window -> continuation thesis invalidated.
         return PaperDecision(
             **base,
             decision="reject",
-            reason="ETH B-side cascade reclaimed through event_vwap, no continuation",
+            reason="ETH A-side cascade reclaimed through event_vwap, no continuation",
         ), None
 
-    book_imbalance = imbalance_bucket(cascade.get("top_book_imbalance"))
-    if book_imbalance != ETH_REQUIRED_IMBALANCE_BUCKET:
+    context = compute_context_features(cascade, ctx_rows or [], None)
+    if context.funding_z_bucket != ETH_REQUIRED_FUNDING_BUCKET:
         return (
             PaperDecision(
                 **base,
                 decision="reject",
                 reason=(
                     "ETH paper gate requires "
-                    f"top_book_imbalance={ETH_REQUIRED_IMBALANCE_BUCKET}, got {book_imbalance}"
-                ),
-            ),
-            None,
-        )
-    if flow_label_30s != ETH_REQUIRED_FLOW_LABEL:
-        return (
-            PaperDecision(
-                **base,
-                decision="reject",
-                reason=(
-                    "ETH paper gate requires "
-                    f"flow_amplifies_{ETH_FLOW_WINDOW_SECONDS}s, got {flow_label_30s}"
+                    f"funding_z={ETH_REQUIRED_FUNDING_BUCKET}, got {context.funding_z_bucket}"
                 ),
             ),
             None,
@@ -589,11 +568,11 @@ def _build_eth_position(
     if entry_price is None or entry_price <= 0:
         return PaperDecision(**base, decision="reject", reason="missing ETH entry close"), None
 
-    direction = "long"  # ETH B-side cascade fade is always long
-    stop = event_vwap * (1.0 - ETH_STOP_BUFFER_BPS / 10_000.0)
-    if stop >= entry_price:
-        return PaperDecision(**base, decision="reject", reason="ETH event_vwap stop is not below long entry"), None
-    stop_bps = (entry_price - stop) / entry_price * 10_000.0
+    direction = _continuation_direction(side)
+    stop = event_vwap * (1.0 + ETH_STOP_BUFFER_BPS / 10_000.0)
+    if stop <= entry_price:
+        return PaperDecision(**base, decision="reject", reason="ETH event_vwap stop is not above short entry"), None
+    stop_bps = abs(entry_price - stop) / entry_price * 10_000.0
     notional_usd, risk_usd = _paper_notional_for_stop(entry_price, stop)
     verdict = _risk_verdict(sym, direction, notional_usd, risk_usd)
     if verdict != RiskVerdict.APPROVED:
@@ -602,7 +581,7 @@ def _build_eth_position(
     paper_id = _paper_id(key, route.lane)
     position = PaperPosition(
         paper_id=paper_id,
-        paper_scope="research_paper",
+        paper_scope="v1_paper",
         cascade_key=key,
         symbol=sym,
         side=side,
@@ -626,17 +605,18 @@ def _build_eth_position(
         ),
         metadata={
             "event_vwap": event_vwap,
-            "paper_gate": f"top_book_imbalance={ETH_REQUIRED_IMBALANCE_BUCKET}",
-            "top_book_imbalance": cascade.get("top_book_imbalance"),
-            "top_book_imbalance_bucket": book_imbalance,
+            "paper_gate": f"funding_z={ETH_REQUIRED_FUNDING_BUCKET}",
+            "funding": context.funding,
+            "funding_z": context.funding_z,
+            "funding_z_bucket": context.funding_z_bucket,
             "flow_label_30s": flow_label_30s,
-            "flow_stats_30s": flow_stats_30s,
+            "flow_stats_30s": flow_stats_30s or {},
             "wait_minutes": ETH_WAIT_MINUTES,
             "initial_stop_bps": round(stop_bps, 4),
-            "lane_basis": "eth_book_persistence_fade (research-only)",
+            "lane_basis": "eth_funding_context_follow (v1 paper)",
             "research_source": (
-                "ETH flow_amplifies_30s 5m PF=2.01 n=30 (book_persistence_filter "
-                "backtest 2026-08-06)"
+                "ETH side=A follow 60m funding_z=funding_pos_elevated "
+                "PF=1.5661 n=58 median=0.0760% (context_filter_backtest 2026-08-10)"
             ),
         },
     )
@@ -644,7 +624,7 @@ def _build_eth_position(
         PaperDecision(
             **base,
             decision="open_position",
-            reason=f"ETH B-side book-persistence fade with {book_imbalance} book",
+            reason=f"ETH A-side funding-context follow with {context.funding_z_bucket}",
             paper_id=paper_id,
         ),
         position,
@@ -726,6 +706,7 @@ def build_position_for_cascade(
     cascade: dict,
     candles_by_symbol: dict[str, list[dict]],
     trades_by_symbol: dict[str, list[dict]] | None = None,
+    ctx_by_symbol: dict[str, list[dict]] | None = None,
 ) -> tuple[PaperDecision | None, PaperPosition | None]:
     """Build a deterministic paper decision and optional paper position."""
     sym = str(cascade.get("symbol", "")).upper()
@@ -756,24 +737,12 @@ def build_position_for_cascade(
         closes = [_close(c) for c in candles[entry_idx:needed]]
         if any(c is None for c in closes):
             return None, None
-        event_ts = _cascade_ts_ms(cascade)
-        if event_ts is None:
-            return None, None
-        trades = (trades_by_symbol or {}).get(sym, [])
-        flow_window = _trades_in_window(
-            trades,
-            event_ts,
-            event_ts + ETH_FLOW_WINDOW_SECONDS * 1000,
-        )
-        flow_stats = _trade_flow_stats(flow_window)
-        flow_label = _trade_flow_label(side, float(flow_stats["flow_imbalance"]))
         return _build_eth_position(
             cascade,
             candles,
             entry_idx,
             [float(c) for c in closes if c is not None],
-            flow_label,
-            flow_stats,
+            ctx_rows=(ctx_by_symbol or {}).get(sym, []),
         )
     return _build_hype_position(cascade, candles, entry_idx)
 
@@ -787,7 +756,8 @@ def run_once(*, data_dir: Path = DATA_DIR, state_path: Path = STATE_PATH, max_ne
     cascades = _load_cascades(data_dir)
     symbols = {str(c.get("symbol", "")).upper() for c in cascades if str(c.get("symbol", "")).upper() in PAPER_SYMBOLS}
     candles_by_symbol = {sym: _load_completed_candles(sym, data_dir=data_dir) for sym in symbols}
-    trades_by_symbol = {"ETH": _load_trades("ETH", data_dir=data_dir)} if "ETH" in symbols else {}
+    trades_by_symbol: dict[str, list[dict]] = {}
+    ctx_by_symbol = {"ETH": _load_asset_ctx("ETH", ctx_dir=data_dir / "asset_ctx")} if "ETH" in symbols else {}
     decisions_written = 0
     positions_opened = 0
     positions_closed = 0
@@ -820,7 +790,7 @@ def run_once(*, data_dir: Path = DATA_DIR, state_path: Path = STATE_PATH, max_ne
     for cascade in new_cascades:
         mark_open_positions(_cascade_ts_ms(cascade))
         key = _cascade_key(cascade)
-        decision, position = build_position_for_cascade(cascade, candles_by_symbol, trades_by_symbol)
+        decision, position = build_position_for_cascade(cascade, candles_by_symbol, trades_by_symbol, ctx_by_symbol)
         if decision is None:
             continue
         processed.add(key)

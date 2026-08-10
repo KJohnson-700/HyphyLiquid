@@ -210,33 +210,32 @@ def route_signal(
         )
 
     if sym == "ETH":
-        # Per Slim 2026-08-06: ETH just earned a focused paper/research lane
-        # from the book-persistence backtest (ETH flow_amplifies_30s 5m
-        # passed PF 2.01 n=30; ETH flow_amplifies_60s 15m passed PF 1.62
-        # n=39). Both are B-side continuation (long), with the live
-        # entry filter being BBO ask_heavy at cascade time. We do NOT
-        # allow live execution here (execution_allowed=False) -- the
-        # paper_decision_loop records ETH B-side cascades as
-        # research_paper scope only.
+        if side == "A" and response.label == "post_liquidation_continuation":
+            return RegimeRoute(
+                "watch",
+                "eth_funding_context_follow",
+                True,
+                "ETH A-side continuation with elevated funding is the current v1 paper candidate",
+            )
         if side == "B" and response.label == "post_liquidation_continuation":
             return RegimeRoute(
                 "research_candidate",
                 "eth_book_persistence_fade",
                 False,
-                "ETH B-side continuation with book-persistence conditions is a focused research lane",
+                "ETH B-side book-persistence lane is retired from new paper opens after negative forward paper",
             )
         if side == "B":
             return RegimeRoute(
                 "watch",
                 "eth_book_persistence_fade",
                 False,
-                "ETH B-side watchlist pocket (reclaim visible, paper logs only)",
+                "ETH B-side book-persistence lane is retired from new paper opens",
             )
         return RegimeRoute(
             "collect_only",
-            "eth_book_persistence_fade",
-            False,
-            "ETH A-side cascades not in the current paper/research lane",
+            "eth_funding_context_follow",
+            True,
+            "ETH A-side did not show continuation; reclaim visible",
         )
 
     if sym == "HYPE":

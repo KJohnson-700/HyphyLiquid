@@ -167,8 +167,9 @@ class TestRegimeRouting(unittest.TestCase):
         self.assertEqual(route.lane, "eth_book_persistence_fade")
         self.assertFalse(route.execution_allowed)
 
-    def test_eth_a_side_collect_only(self):
-        # ETH A-side cascades are not in the current lane; collect only.
+    def test_eth_a_side_continuation_routes_to_funding_context_follow(self):
+        # ETH A-side failed-reclaim/continuation is the current v1 paper
+        # candidate. The funding-Z gate is applied in paper_decision_loop.
         candle = classify_candle_regime(
             [_bar(_ms("2026-08-03T00:00:00+00:00") + i * 60000, c=100 + i * 0.1) for i in range(21)],
             20,
@@ -178,9 +179,9 @@ class TestRegimeRouting(unittest.TestCase):
 
         route = route_signal("ETH", "A", candle, response)
 
-        self.assertEqual(route.action, "collect_only")
-        self.assertEqual(route.lane, "eth_book_persistence_fade")
-        self.assertFalse(route.execution_allowed)
+        self.assertEqual(route.action, "watch")
+        self.assertEqual(route.lane, "eth_funding_context_follow")
+        self.assertTrue(route.execution_allowed)
 
 
 if __name__ == "__main__":
