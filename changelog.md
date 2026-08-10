@@ -4,6 +4,28 @@
 
 ---
 
+## 2026-08-08 - Add Tier-2 L2 cascade-feature joiner and depth/OBI/OFI filter backtest
+
+Marvis built the second half of the Tier-2 shortlist per Slim's 2026-08-07 directive: cascade joiner + L2-driven filter backtest.
+
+**What changed**
+- New `scripts/build_l2_cascade_features.py` joins `data/cascades.jsonl` with `data/l2_depth_features/{symbol}_{YYYY-MM-DD}.jsonl` at four snapshots per cascade (t-30s, t+5s, t+30s, t+60s relative to `event_ts_ms`). Output: `data/l2_cascade_features/{symbol}_{YYYY-MM-DD}.jsonl` with original cascade fields, four snapshot blocks, and derived `pre_thinning` + `post_resilience` features.
+- New `tests/test_build_l2_cascade_features.py` — 47/47 tests passing. Covers math helpers, bisect snapshot selector (exact/before/after/gap-too-big/empty), L2 file loading (valid, bad json, missing ts_ms, missing file, empty), cascade loading with symbol and date filter, per-cascade record build (all snapshots, partial coverage, no coverage, depth drop, spread widen, depth recovery, spread recovery), per-date atomic write, and CLI smoke.
+- New `scripts/run_depth_obi_filter.py` tests 10 filter buckets per (symbol, side, horizon) cell against the standard promotion gate (n>=30, PF>1.5, top_win_share<=0.35, plus inf-PF rejected as suspicious). Filters: baseline, obi_5_drop<−0.5, obi_10_drop<−0.3, depth_top5_thin, depth_top10_thin, spread_widen>0.5, ofi_5_30s_neg, stale_at_t5, pre_thin_post_recov, obi_5_recover>0.3.
+- New `tests/test_run_depth_obi_filter.py` — 32/32 tests passing. Covers all 10 filter callables (sign-by-side math), ISO timestamp parsing, fade return computation (correct side-B/A direction per project convention, 8bps cost subtraction), verdict gate, bucket evaluation, file loading, CLI.
+- Full multi-symbol join: 19/19 files written, 2276 cascades in, 2276 written, 0 dropped. Snapshot coverage: 2170/2276 (95.3%) have all 4 snapshots; 105 have 0 (mostly SOL 8/6 boundary or no L2 coverage); 1 has 3.
+- **Backtest result: 0/240 buckets passed the promotion gate.** This is consistent with the rest of the project: simple rules on the cascade-fade baseline have decayed below PF 1.0 (BTC/ETH baseline PF 0.16-0.71 across horizons; SOL 0.21-0.71). L2 filter buckets do not improve over baseline at any horizon — at best they reach PF 0.86 (SOL B 30m pre_thin_post_recov, n=22 below gate).
+- `stale_at_t5` filter has 0 matches because the existing Tier-2 stale detector (spread > 1.5x rolling 5min median AND mid drift < 1 bps over 5min) never fires on HL's high-frequency data: 0/348,247 events have `stale_book_flag=True`. This is a finding, not a fix request — Slim's standing rule is no interpretation.
+- Output: `data/depth_obi_filter_results.json` (240 verdicts) + `data/depth_obi_filter_summary.md`.
+
+**Why**
+- Tier-2 L2 features (OBI, OFI, depth, stale, lag) were built on 2026-08-07 (commit `7fa7b8f`) but not wired to any filter backtest. This commit closes the loop: cascades get L2 features, and we can ask whether L2-driven filters recover or extend the cascade-fade edge.
+
+**Standing rule respected**
+- No execution, no risk.py, no order_manager changes. BTC/ETH/SOL only (HYPE has no L2 data, HIP-3 excluded). No tuning of the L2 stale detector thresholds. No interpretation of the zero-pass result.
+
+---
+
 ## 2026-08-08 - Keep asset-context poller alive on predicted-funding 502s
 
 Codex fixed the recurring `poll_asset_ctx.py` daemon death seen around the 02:00 PT tick.
