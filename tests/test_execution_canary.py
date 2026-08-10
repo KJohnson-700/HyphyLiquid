@@ -41,6 +41,21 @@ class TestExecutionCanaryGuard(unittest.TestCase):
         self.assertFalse(status["live_guard"]["allowed"])
         self.assertIn("refused", status["next_action"])
 
+    def test_status_carries_eth_intent_preview(self):
+        guard = check_live_guard(cli_armed=False, env="testnet", env_armed="")
+
+        status = build_status(
+            mode="paper",
+            guard=guard,
+            paper_payload={
+                "paper_pass": {"decisions_written": 1},
+                "eth_intent_preview": {"eligible": True, "lane": "eth_funding_context_follow"},
+            },
+        )
+
+        self.assertTrue(status["eth_intent_preview"]["eligible"])
+        self.assertEqual(status["eth_intent_preview"]["lane"], "eth_funding_context_follow")
+
 
 if __name__ == "__main__":
     unittest.main()

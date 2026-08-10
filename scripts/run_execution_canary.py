@@ -85,6 +85,21 @@ def _render_status(status: dict) -> str:
         )
     else:
         lines.append("- skipped")
+    intent = status.get("eth_intent_preview") or {}
+    lines.extend(["", "## ETH Intent Preview", ""])
+    if intent:
+        lines.extend(
+            [
+                f"- Eligible: {intent.get('eligible')}",
+                f"- Reason: {intent.get('reason')}",
+                f"- Lane: `{intent.get('lane', '')}`",
+                f"- Symbol/side: `{intent.get('symbol', '')}` / `{intent.get('side', '')}`",
+                f"- Entry/SL/TP: `{intent.get('entry_px', '')}` / `{intent.get('sl_px', '')}` / `{intent.get('tp_px', '')}`",
+                f"- Timeout exit: `{intent.get('timeout_exit', '')}`",
+            ]
+        )
+    else:
+        lines.append("- skipped")
     audit = status.get("audit") or {}
     lines.extend(["", "## Audit", ""])
     if audit:
@@ -108,12 +123,15 @@ def run_paper_canary(*, max_new: int, recent: int) -> dict:
     """Run one live-like paper pass plus audit."""
     from scripts.paper_decision_loop import run_once
     from scripts.run_paper_audit import build_audit, write_audit
+    from src.execution.paper_intents import build_latest_eth_intent_preview
 
     paper_pass = run_once(max_new=max_new)
     audit = build_audit(DATA_DIR, recent_limit=recent)
     _, md_path = write_audit(audit, DATA_DIR)
+    eth_intent_preview = build_latest_eth_intent_preview(DATA_DIR)
     return {
         "paper_pass": paper_pass,
+        "eth_intent_preview": eth_intent_preview,
         "audit": {
             "decisions": audit["decision_summary"]["total"],
             "opened": audit["opened_positions"],
@@ -142,6 +160,7 @@ def build_status(*, mode: str, guard: LiveGuard, paper_payload: dict | None = No
         "mode": mode,
         "live_guard": asdict(guard),
         "paper_pass": paper_payload.get("paper_pass"),
+        "eth_intent_preview": paper_payload.get("eth_intent_preview"),
         "audit": paper_payload.get("audit"),
         "next_action": next_action,
     }

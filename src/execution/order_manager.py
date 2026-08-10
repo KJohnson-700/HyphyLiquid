@@ -37,7 +37,12 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    def load_dotenv(*args, **kwargs) -> bool:
+        """Fallback when python-dotenv is unavailable outside live env loading."""
+        return False
 
 from src.risk import (
     RiskConfig,

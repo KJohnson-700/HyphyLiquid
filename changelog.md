@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-08-10 - Add ETH paper-to-execution intent adapter
+
+Codex wired the narrowed ETH funding-context follow lane toward live-like canary execution without enabling live orders.
+
+**What changed**
+- Added `src/execution/paper_intents.py` to convert only `eth_funding_context_follow` `v1_paper` positions into `BracketOrderIntent`.
+- The adapter rejects retired lanes, research-paper positions, non-v1 symbols, non-ETH symbols, non-short directions, targets, and trailing activation.
+- `scripts/run_execution_canary.py` now writes an ETH intent preview showing whether the latest ETH paper position can be represented as a stop-only bracket.
+- The status explicitly marks the 60-minute timeout exit as `bot_managed`; the Hyperliquid bracket covers entry + stop, while the daemon must still supervise the timed exit.
+- `src/execution/order_manager.py` no longer fails at import time when `python-dotenv` is absent; `from_env()` still requires real env values before live use.
+- Added `tests/test_paper_intents.py` and extended `tests/test_execution_canary.py`.
+
+**Why**
+- Slim asked to stop dragging through broad simulation and move the strongest current v1 candidate toward a working, close-to-live bot path.
+- This keeps live order placement guarded while proving that the exact paper lane can cross the execution boundary deterministically.
+
+---
+
 ## 2026-08-09 - Narrow active paper lane to ETH funding-context follow
 
 Codex narrowed the active v1 paper path to the strongest current v1-eligible bucket instead of continuing broad simulation churn.
