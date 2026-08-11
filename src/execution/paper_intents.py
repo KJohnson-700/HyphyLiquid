@@ -51,17 +51,28 @@ def paper_position_to_bracket_intent(position: PaperPosition) -> BracketOrderInt
 
 
 def latest_active_eth_position(data_dir: Path) -> PaperPosition | None:
-    """Return the latest opened active ETH paper position from append-only ledgers."""
+    """Return the latest still-open active ETH paper position from append-only ledgers."""
     latest: PaperPosition | None = None
+    rows_by_path: list[dict] = []
     for path in sorted(data_dir.glob("paper_positions_*.jsonl")):
-        for row in _load_jsonl(path):
-            if row.get("event") != "opened":
-                continue
-            if row.get("symbol") != "ETH" or row.get("lane") != ACTIVE_EXECUTION_LANE:
-                continue
-            position = _position_from_row(row)
-            if position is not None:
-                latest = position
+        rows_by_path.extend(_load_jsonl(path))
+    closed_ids = {
+        str(row.get("paper_id"))
+        for row in rows_by_path
+        if row.get("event") == "mark"
+        and isinstance(row.get("fill"), dict)
+        and row["fill"].get("status") == "closed"
+    }
+    for row in rows_by_path:
+        if row.get("event") != "opened":
+            continue
+        if str(row.get("paper_id")) in closed_ids:
+            continue
+        if row.get("symbol") != "ETH" or row.get("lane") != ACTIVE_EXECUTION_LANE:
+            continue
+        position = _position_from_row(row)
+        if position is not None:
+            latest = position
     return latest
 
 
@@ -71,7 +82,7 @@ def build_latest_eth_intent_preview(data_dir: Path) -> dict:
     if position is None:
         return {
             "eligible": False,
-            "reason": "no ETH funding-context paper position has opened yet",
+            "reason": "no open ETH funding-context paper position is available",
             "lane": ACTIVE_EXECUTION_LANE,
         }
     try:

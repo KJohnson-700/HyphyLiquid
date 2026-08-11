@@ -82,12 +82,32 @@ class TestPaperIntents(unittest.TestCase):
             self.assertEqual(preview["paper_id"], "paper-eth")
             self.assertEqual(preview["timeout_exit"], "bot_managed")
 
+    def test_latest_preview_ignores_closed_position(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            path = data_dir / "paper_positions_20260810.jsonl"
+            closed = _eth_position(paper_id="closed-eth")
+            open_ = _eth_position(paper_id="open-eth")
+            rows = [
+                {"event": "opened", **closed.to_dict()},
+                {"event": "mark", "paper_id": "closed-eth", "fill": {"status": "closed"}},
+                {"event": "opened", **open_.to_dict()},
+            ]
+            path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+            latest = latest_active_eth_position(data_dir)
+            preview = build_latest_eth_intent_preview(data_dir)
+
+            self.assertIsNotNone(latest)
+            self.assertEqual(latest.paper_id, "open-eth")
+            self.assertEqual(preview["paper_id"], "open-eth")
+
     def test_preview_reports_no_position_yet(self):
         with tempfile.TemporaryDirectory() as tmp:
             preview = build_latest_eth_intent_preview(Path(tmp))
 
             self.assertFalse(preview["eligible"])
-            self.assertIn("no ETH", preview["reason"])
+            self.assertIn("no open ETH", preview["reason"])
 
 
 if __name__ == "__main__":

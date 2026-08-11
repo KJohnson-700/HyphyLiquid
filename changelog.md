@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-08-11 - Add ETH timeout position supervisor
+
+Codex started the live-like bot architecture build by adding a deterministic position lifecycle supervisor.
+
+**What changed**
+- Added `src/execution/position_supervisor.py` with managed-position modeling, timeout decisions, reduce-only close intents, and a close executor that prefers SDK `market_close` but can fall back to a reduce-only IOC order.
+- `scripts/run_execution_canary.py` now includes an ETH timeout-supervisor preview in the persisted canary status.
+- Fixed the ETH intent preview to ignore already-closed paper positions instead of treating the latest opened row as still active.
+- Added `tests/test_position_supervisor.py` and extended the execution canary test so the timeout worker boundary is covered before live wiring.
+
+**Decision**
+- HyphyLiquid should be built as separate workers: data collectors, deterministic strategy/router, execution intent adapter, position supervisor, AI advisory, audit/journal, and status/monitoring. The supervisor owns time exits; the strategy does not.
+
+---
+
 ## 2026-08-10 - Add winning Hyperliquid strategy map
 
 Codex logged a sharper research/decision note answering Slim's challenge that profitable Hyperliquid bot families already exist.
