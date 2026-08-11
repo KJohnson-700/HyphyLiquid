@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-08-10 - Add winning Hyperliquid strategy map
+
+Codex logged a sharper research/decision note answering Slim's challenge that profitable Hyperliquid bot families already exist.
+
+**What changed**
+- Added `docs/2026-08-10-PLAN-winning-hyperliquid-strategy-map.md`.
+- Mapped external bot families to HyphyLiquid lanes: ETH funding-follow as active v1, BTC failed-reclaim as watch, HYPE range/Iron Eagle as research, SOL/DOGE/BNB as threshold sanity, market making/arbitrage as not-v1.
+- Captured the MiniMax/Marvis follow-up prompt for focused strategy-adjustment research once `mmx` is callable again.
+
+**Decision**
+- Do not keep debating whether Hyperliquid bots can work. Proceed with ETH timeout-exit supervisor and AI exit advisory, while MiniMax research becomes parallel support rather than a blocker.
+
+---
+
 ## 2026-08-10 - Refresh AI integration plan and advisory playbooks
 
 Codex reconciled the AI advisory layer with the current ETH-first bot build path.
