@@ -35,6 +35,34 @@ class TestAIAdvisory(unittest.TestCase):
         self.assertEqual(decision.action, "watch_playbook")
         self.assertEqual(decision.warnings, ())
 
+    def test_valid_eth_funding_context_advice_can_be_execution_eligible(self):
+        packet = make_advisory_packet(
+            symbol="ETH",
+            deterministic_route={"execution_allowed": True},
+            indicators={},
+            risk={},
+        )
+
+        decision = validate_advisory(
+            packet,
+            {
+                "symbol": "ETH",
+                "model_id": "claude-sonnet",
+                "action": "watch_playbook",
+                "playbook": "eth_a_funding_context_follow",
+                "confidence": 0.78,
+                "rationale": "Funding context, tape, and risk are aligned.",
+                "evidence": {
+                    "regime": "funding-positive continuation context",
+                    "tape": "A-side liquidation continuation",
+                    "risk": "stop-only bracket remains inside caps",
+                },
+            },
+        )
+
+        self.assertTrue(decision.allowed_for_execution)
+        self.assertEqual(decision.playbook, "eth_a_funding_context_follow")
+
     def test_ai_execution_request_is_ignored(self):
         packet = make_advisory_packet(
             symbol="BTC",

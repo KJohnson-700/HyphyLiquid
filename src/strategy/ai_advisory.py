@@ -17,8 +17,10 @@ VALID_ADVISORY_ACTIONS = frozenset({"stand_down", "maintain", "paper_only", "wat
 VALID_PLAYBOOKS = frozenset(
     {
         "btc_b_failed_reclaim_ask_heavy",
+        "eth_a_funding_context_follow",
         "hype_b_range_scalp_research",
         "hype_b_wide_range_grid_research",
+        "eth_b_book_persistence_retired",
         "eth_rejected_collect_only",
         "alts_collect_only",
     }

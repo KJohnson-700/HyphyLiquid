@@ -24,7 +24,7 @@ def _load_json(path: Path) -> Any:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return None
 
@@ -108,22 +108,49 @@ def _paper_audit_context(data_dir: Path) -> dict:
     }
 
 
+def _execution_canary_context(data_dir: Path) -> dict:
+    status = _load_json(data_dir / "execution_canary_status.json")
+    if not isinstance(status, dict):
+        return {}
+    return {
+        "mode": status.get("mode"),
+        "live_guard": status.get("live_guard"),
+        "eth_intent_preview": status.get("eth_intent_preview"),
+        "next_action": status.get("next_action"),
+    }
+
+
 def build_packet(symbol: str, data_dir: Path = DATA_DIR) -> dict:
     """Build an advisory packet for the given symbol from latest local diagnostics."""
     sym = symbol.upper()
     regime = _latest_regime_summary(data_dir)
     filter_bucket = _top_filter_bucket(sym, data_dir)
     paper = _paper_audit_context(data_dir)
+    canary = _execution_canary_context(data_dir)
     btc_watch = regime.get("btc_watch_pocket", {}) if isinstance(regime.get("btc_watch_pocket"), dict) else {}
     latest_regime_metadata = regime.get("rebuild_metadata", {}) if isinstance(regime.get("rebuild_metadata"), dict) else {}
     safety = regime.get("safety_gate", {}) if isinstance(regime.get("safety_gate"), dict) else {}
 
-    deterministic_allowed = sym in {"BTC", "ETH"} and sym == "BTC"
+    deterministic_allowed = sym in {"BTC", "ETH"}
+    if sym == "ETH":
+        current_rule = (
+            "ETH side=A follow 60m when funding_z=funding_pos_elevated; "
+            "stop-only bracket, 60m bot-managed timeout exit"
+        )
+        active_playbook = "eth_a_funding_context_follow"
+    elif sym == "BTC":
+        current_rule = "BTC side=B failed_reclaim_continuation + top_book_imbalance=ask_heavy watch pocket"
+        active_playbook = "btc_b_failed_reclaim_ask_heavy"
+    elif sym == "HYPE":
+        current_rule = "research-only HYPE context/range playbooks; no execution"
+        active_playbook = "hype_b_range_scalp_research"
+    else:
+        current_rule = "collect_or_reject"
+        active_playbook = "alts_collect_only"
     route = {
         "execution_allowed": deterministic_allowed,
-        "current_rule": "BTC side=B failed_reclaim_continuation + top_book_imbalance=ask_heavy"
-        if sym == "BTC"
-        else "collect_or_reject",
+        "current_rule": current_rule,
+        "active_playbook": active_playbook,
         "safety_gate_holds": safety.get("gate_holds", True),
     }
     disagreement = {
@@ -162,7 +189,9 @@ def build_packet(symbol: str, data_dir: Path = DATA_DIR) -> dict:
         risk=risk,
         news=news,
     )
-    return packet.to_dict()
+    out = packet.to_dict()
+    out["execution_canary"] = canary
+    return out
 
 
 def _append_jsonl(path: Path, row: dict) -> None:
@@ -189,7 +218,8 @@ def main() -> int:
             raise SystemExit(f"response JSON is missing or invalid: {args.response_json}")
         from src.strategy.ai_advisory import AdvisoryPacket  # noqa: WPS433
 
-        packet = AdvisoryPacket(**packet_dict)
+        packet_fields = AdvisoryPacket.__dataclass_fields__.keys()
+        packet = AdvisoryPacket(**{k: packet_dict[k] for k in packet_fields})
         decision = validate_advisory(packet, raw)
         decision_path = args.data_dir / "ai_advisory_decisions.jsonl"
         _append_jsonl(decision_path, decision.to_dict())

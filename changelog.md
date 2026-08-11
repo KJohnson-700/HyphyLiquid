@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-08-10 - Refresh AI integration plan and advisory playbooks
+
+Codex reconciled the AI advisory layer with the current ETH-first bot build path.
+
+**What changed**
+- Added `docs/2026-08-10-PLAN-ai-integrated-bot-build.md`.
+- `src/strategy/ai_advisory.py` now recognizes `eth_a_funding_context_follow` and `eth_b_book_persistence_retired`.
+- `scripts/run_ai_advisory_packet.py` now treats ETH as an active v1 advisory symbol and includes the latest execution canary context.
+- Added an ETH advisory guardrail test.
+
+**Decision**
+- Cron/daemon infrastructure is not the edge. AI belongs in chart/tape/regime/news/post-trade interpretation, while deterministic code owns execution, risk, stops, and journaling.
+
+---
+
 ## 2026-08-10 - Add ETH paper-to-execution intent adapter
 
 Codex wired the narrowed ETH funding-context follow lane toward live-like canary execution without enabling live orders.
