@@ -4,6 +4,27 @@
 
 ---
 
+## 2026-08-12 - Add guarded bracket/protective-stop proof
+
+Codex added and verified the next testnet safety proof: tiny ETH entry plus visible reduce-only protective stop.
+
+**What changed**
+- Extended `scripts/run_testnet_proof.py` with `--proof-kind bracket` and `--stop-bps` for a guarded testnet bracket proof.
+- Added `run_bracket_proof()` to submit a tiny IOC entry plus reduce-only SL via SDK `bulk_orders(grouping="normalTpsl")`.
+- Added protective-stop order construction, SDK bulk-order request adaptation, and best-effort leftover order cleanup.
+- Expanded status markdown rendering for grouped entry/stop requests and protective-stop visibility.
+- Added tests for stop order shape, grouped SDK request conversion, protective-stop detection, cleanup, and missing-stop failure status.
+
+**Verification**
+- Focused suite: `41/41` passing across testnet proof, position supervisor, reconciler, execution canary, and paper intents.
+- Compile pass clean for the touched proof modules/scripts.
+- Guarded Hyperliquid testnet bracket proof passed: tiny ETH short opened, reduce-only SL was visible after entry, reduce-only close filled, and final exchange snapshot was flat with zero open orders.
+
+**Decision**
+- This proves the minimum live-like protective-order lifecycle on testnet. Next engineering slice is wiring this safety expectation into paper/live promotion gates and supervisor status, not increasing size.
+
+---
+
 ## 2026-08-12 - Repair testnet proof IOC price rounding
 
 Codex fixed the testnet execution proof blocker and verified the tiny ETH open/close path against Hyperliquid testnet.

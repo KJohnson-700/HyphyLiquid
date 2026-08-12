@@ -93,11 +93,23 @@ def _render_status(status: dict) -> str:
             request = order.get("request") or {}
             response = order.get("response") or {}
             response_status = response.get("status") or response.get("response", {}).get("status") or ""
-            lines.append(
-                f"- {order.get('type')}: `{request.get('name') or request.get('symbol')}` "
-                f"size `{request.get('sz') or request.get('size_coin')}` "
-                f"limit `{request.get('limit_px', '')}` status `{response_status}`"
-            )
+            if isinstance(request, list):
+                lines.append(f"- {order.get('type')}: `{len(request)}` grouped requests status `{response_status}`")
+                for child in request:
+                    lines.append(
+                        f"  - `{child.get('coin') or child.get('name')}` "
+                        f"size `{child.get('sz')}` limit `{child.get('limit_px', '')}` "
+                        f"reduce_only `{child.get('reduce_only')}`"
+                    )
+            else:
+                lines.append(
+                    f"- {order.get('type')}: `{request.get('name') or request.get('symbol')}` "
+                    f"size `{request.get('sz') or request.get('size_coin')}` "
+                    f"limit `{request.get('limit_px', '')}` status `{response_status}`"
+                )
+    if "protective_stop_visible" in status:
+        lines.extend(["", "## Protective Stop", ""])
+        lines.append(f"- Visible after open: `{status.get('protective_stop_visible')}`")
     after_close = status.get("after_close") or {}
     if after_close:
         lines.extend(["", "## After Close", ""])
@@ -117,11 +129,14 @@ def main() -> int:
     parser.add_argument("--side", choices=("long", "short"), default="short")
     parser.add_argument("--size-coin", type=float, default=0.01)
     parser.add_argument("--slippage-bps", type=float, default=20.0)
+    parser.add_argument("--proof-kind", choices=("open_close", "bracket"), default="open_close")
+    parser.add_argument("--stop-bps", type=float, default=35.0)
     args = parser.parse_args()
 
     from src.execution.testnet_proof import (
         build_testnet_proof_plan,
         check_testnet_proof_guard,
+        run_bracket_proof,
         run_fetch_only_proof,
         run_order_proof,
         utc_now_iso,
@@ -137,7 +152,7 @@ def main() -> int:
         execute_orders=args.execute_testnet_orders,
         cli_armed=args.i_understand_testnet_orders,
     )
-    plan = build_testnet_proof_plan(guard)
+    plan = build_testnet_proof_plan(guard, proof_kind=args.proof_kind)
     status = {
         "generated_at": utc_now_iso(),
         "mode": plan["mode"],
@@ -149,17 +164,31 @@ def main() -> int:
     if guard.allowed and args.fetch_exchange:
         info, exchange, resolved_user = _clients(env)
         if args.execute_testnet_orders:
-            status.update(
-                run_order_proof(
-                    info,
-                    exchange,
-                    user=resolved_user,
-                    symbol=args.symbol,
-                    side=args.side,
-                    size_coin=args.size_coin,
-                    slippage_bps=args.slippage_bps,
+            if args.proof_kind == "bracket":
+                status.update(
+                    run_bracket_proof(
+                        info,
+                        exchange,
+                        user=resolved_user,
+                        symbol=args.symbol,
+                        side=args.side,
+                        size_coin=args.size_coin,
+                        slippage_bps=args.slippage_bps,
+                        stop_bps=args.stop_bps,
+                    )
                 )
-            )
+            else:
+                status.update(
+                    run_order_proof(
+                        info,
+                        exchange,
+                        user=resolved_user,
+                        symbol=args.symbol,
+                        side=args.side,
+                        size_coin=args.size_coin,
+                        slippage_bps=args.slippage_bps,
+                    )
+                )
         else:
             status.update(run_fetch_only_proof(info, user=resolved_user))
             status["status"] = "fetched"
