@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-08-11 - Add guarded testnet proof runner
+
+Codex added the next live-like proof slice for reconciliation and reduce-only close mechanics.
+
+**What changed**
+- Added `src/execution/testnet_proof.py` with a dry-run/fetch/execute guard, tiny IOC order builder, fetch-only reconciliation proof, and explicit testnet open-then-reduce-only-close proof flow.
+- Added `scripts/run_testnet_proof.py`; default mode is dry-run and sends no orders. Exchange fetch requires testnet/user state, while actual testnet orders require `--execute-testnet-orders --i-understand-testnet-orders`.
+- Added `tests/test_testnet_proof.py` to cover guard behavior, IOC request shape, fetch-only reconciliation, order proof close flow, and block-before-open behavior.
+
+**Decision**
+- The next real exchange proof should happen on testnet only after the Python runtime has the official Hyperliquid SDK installed and wallet env values available. Mainnet is refused by the proof guard.
+
+---
+
 ## 2026-08-11 - Add exchange reconciliation safety layer
 
 Codex added the local-vs-Hyperliquid reconciliation layer required before live-like supervision can safely manage real positions.

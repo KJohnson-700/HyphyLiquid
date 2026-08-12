@@ -134,7 +134,7 @@ For now, a stable VPS close to good network routes is more useful than a VPN.
 
 1. Position supervisor timeout close preview.
 2. Live state reconciliation read: open position, open orders, stop order existence. Added 2026-08-11 in `src/execution/reconciler.py`.
-3. Reduce-only timeout close dry-run/testnet proof.
+3. Reduce-only timeout close dry-run/testnet proof. Added 2026-08-11 in `src/execution/testnet_proof.py`.
 4. AI exit advisory packet, fail-closed.
 5. Paper loop uses supervisor status.
 6. Mainnet canary only after audit and double arm.

@@ -1,0 +1,218 @@
+"""Guarded testnet proof flow for reconciliation and reduce-only close logic."""
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from typing import Any
+
+from src.execution.position_supervisor import ReduceOnlyCloseIntent, execute_reduce_only_close
+from src.execution.reconciler import ExchangeSnapshot, build_exchange_snapshot, reconcile
+
+
+@dataclass(frozen=True)
+class TestnetProofGuard:
+    """Whether the requested proof mode is allowed to proceed."""
+
+    allowed: bool
+    reason: str
+    env: str
+    user: str
+    fetch_exchange: bool
+    execute_orders: bool
+    cli_armed: bool
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def check_testnet_proof_guard(
+    *,
+    env: str,
+    user: str = "",
+    fetch_exchange: bool = False,
+    execute_orders: bool = False,
+    cli_armed: bool = False,
+) -> TestnetProofGuard:
+    """Validate the requested testnet proof mode."""
+    normalized_env = (env or "").strip().lower()
+    user = user.strip()
+    if not fetch_exchange and not execute_orders:
+        return TestnetProofGuard(True, "dry-run plan only; no exchange calls", normalized_env, user, False, False, cli_armed)
+    if normalized_env != "testnet":
+        return TestnetProofGuard(False, "proof runner only fetches/executes against testnet", normalized_env, user, fetch_exchange, execute_orders, cli_armed)
+    if not user:
+        return TestnetProofGuard(False, "wallet user address is required for exchange proof", normalized_env, user, fetch_exchange, execute_orders, cli_armed)
+    if execute_orders and not fetch_exchange:
+        return TestnetProofGuard(False, "order proof requires --fetch-exchange", normalized_env, user, fetch_exchange, execute_orders, cli_armed)
+    if execute_orders and not cli_armed:
+        return TestnetProofGuard(False, "--i-understand-testnet-orders is required to place testnet orders", normalized_env, user, fetch_exchange, execute_orders, cli_armed)
+    return TestnetProofGuard(True, "testnet proof guard passed", normalized_env, user, fetch_exchange, execute_orders, cli_armed)
+
+
+def build_testnet_proof_plan(guard: TestnetProofGuard) -> dict:
+    """Build a readable proof plan for status artifacts."""
+    steps = [
+        "load official Hyperliquid SDK clients",
+        "fetch user_state and open orders",
+        "normalize exchange snapshot",
+        "run local-vs-exchange reconciliation",
+        "if explicitly armed, open one tiny testnet ETH IOC position",
+        "fetch exchange state after open",
+        "submit reduce-only timeout-style close",
+        "fetch exchange state after close and write status",
+    ]
+    if not guard.fetch_exchange:
+        steps = steps[:4]
+    if not guard.execute_orders:
+        steps = steps[:4]
+    return {
+        "mode": "execute_testnet_orders" if guard.execute_orders else "fetch_exchange" if guard.fetch_exchange else "dry_run",
+        "guard": guard.to_dict(),
+        "steps": steps,
+        "orders_will_be_sent": guard.execute_orders and guard.allowed,
+    }
+
+
+def run_fetch_only_proof(info: Any, *, user: str) -> dict:
+    """Fetch exchange state and run reconciliation without placing orders."""
+    snapshot = fetch_snapshot_from_info(info, user=user)
+    report = reconcile(local_position=None, exchange_snapshot=snapshot)
+    return {
+        "mode": "fetch_exchange",
+        "snapshot": snapshot.to_dict(),
+        "reconciliation": report.to_dict(),
+        "orders_sent": [],
+    }
+
+
+def run_order_proof(
+    info: Any,
+    exchange: Any,
+    *,
+    user: str,
+    symbol: str = "ETH",
+    side: str = "short",
+    size_coin: float = 0.01,
+    slippage_bps: float = 20.0,
+) -> dict:
+    """Open and close one tiny testnet position with reconciliation checks."""
+    before = fetch_snapshot_from_info(info, user=user)
+    before_report = reconcile(local_position=None, exchange_snapshot=before, expected_symbol=symbol)
+    if before_report.blocking:
+        return {
+            "mode": "execute_testnet_orders",
+            "status": "blocked_before_open",
+            "before": before.to_dict(),
+            "before_reconciliation": before_report.to_dict(),
+            "orders_sent": [],
+        }
+
+    mid = _mid_for(info, symbol)
+    open_order = build_ioc_order(
+        symbol=symbol,
+        side=side,
+        size_coin=size_coin,
+        mark_px=mid,
+        reduce_only=False,
+        slippage_bps=slippage_bps,
+    )
+    open_response = exchange.order(
+        open_order["name"],
+        open_order["is_buy"],
+        open_order["sz"],
+        open_order["limit_px"],
+        open_order["order_type"],
+        reduce_only=open_order["reduce_only"],
+    )
+
+    after_open = fetch_snapshot_from_info(info, user=user)
+    matching = [p for p in after_open.positions if p.symbol == symbol.upper()]
+    if not matching:
+        return {
+            "mode": "execute_testnet_orders",
+            "status": "open_not_detected",
+            "before": before.to_dict(),
+            "after_open": after_open.to_dict(),
+            "orders_sent": [{"type": "open_ioc", "request": open_order, "response": open_response}],
+        }
+
+    position = matching[0]
+    close_intent = ReduceOnlyCloseIntent(
+        position_id=f"testnet-proof-{symbol.upper()}",
+        symbol=symbol.upper(),
+        is_buy=(position.side == "short"),
+        size_coin=position.size_coin,
+        reason="testnet_proof_reduce_only_close",
+    )
+    close_result = execute_reduce_only_close(exchange, close_intent, mark_px=_mid_for(info, symbol), slippage_bps=slippage_bps)
+    after_close = fetch_snapshot_from_info(info, user=user)
+    return {
+        "mode": "execute_testnet_orders",
+        "status": "close_submitted" if close_result.submitted else "close_failed",
+        "before": before.to_dict(),
+        "after_open": after_open.to_dict(),
+        "after_close": after_close.to_dict(),
+        "orders_sent": [
+            {"type": "open_ioc", "request": open_order, "response": open_response},
+            {"type": "reduce_only_close", "request": close_intent.to_dict(), "response": close_result.to_dict()},
+        ],
+    }
+
+
+def fetch_snapshot_from_info(info: Any, *, user: str) -> ExchangeSnapshot:
+    """Fetch an exchange snapshot using SDK Info methods."""
+    user_state = info.user_state(user)
+    if hasattr(info, "frontend_open_orders"):
+        open_orders = info.frontend_open_orders(user)
+    else:
+        open_orders = info.open_orders(user)
+    return build_exchange_snapshot(user_state, open_orders, user=user)
+
+
+def build_ioc_order(
+    *,
+    symbol: str,
+    side: str,
+    size_coin: float,
+    mark_px: float,
+    reduce_only: bool,
+    slippage_bps: float = 20.0,
+) -> dict:
+    """Build an aggressive IOC order request compatible with the SDK."""
+    if size_coin <= 0:
+        raise ValueError("size_coin must be positive")
+    if mark_px <= 0:
+        raise ValueError("mark_px must be positive")
+    normalized_side = side.lower()
+    if normalized_side not in {"long", "short"}:
+        raise ValueError("side must be long or short")
+    is_buy = normalized_side == "long"
+    limit_px = _aggressive_px(mark_px, is_buy, slippage_bps)
+    return {
+        "name": symbol.upper(),
+        "is_buy": is_buy,
+        "sz": size_coin,
+        "limit_px": limit_px,
+        "order_type": {"limit": {"tif": "Ioc"}},
+        "reduce_only": reduce_only,
+    }
+
+
+def _mid_for(info: Any, symbol: str) -> float:
+    mids = info.all_mids()
+    mid = float(mids[symbol.upper()])
+    if mid <= 0:
+        raise ValueError(f"invalid mid for {symbol}: {mid}")
+    return mid
+
+
+def _aggressive_px(mark_px: float, is_buy: bool, slippage_bps: float) -> float:
+    slip = max(0.0, slippage_bps) / 10_000.0
+    if is_buy:
+        return round(mark_px * (1.0 + slip), 6)
+    return round(mark_px * (1.0 - slip), 6)
+
+
+def utc_now_iso() -> str:
+    """Return current UTC timestamp as an ISO string."""
+    return datetime.now(timezone.utc).isoformat()
