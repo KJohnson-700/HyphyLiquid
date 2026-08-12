@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-08-12 - Repair testnet proof IOC price rounding
+
+Codex fixed the testnet execution proof blocker and verified the tiny ETH open/close path against Hyperliquid testnet.
+
+**What changed**
+- Added `src/execution/pricing.py` with shared v1 tick rounding and aggressive IOC limit-price helpers.
+- Routed `scripts/run_testnet_proof.py` / `src/execution/testnet_proof.py` and the supervisor reduce-only IOC fallback through the shared price helper.
+- Kept `OrderManager` on the same helper so proof, supervisor, and bracket execution use one BTC/ETH tick policy.
+- Expanded the testnet proof status markdown to show sent order summaries and final flat/open-order state.
+- Added tests for ETH tick rounding, BTC integer-tick rounding, and supervisor fallback close price rounding.
+
+**Verification**
+- Focused suite: `37/37` passing across testnet proof, position supervisor, reconciler, execution canary, and paper intents.
+- Compile pass clean for the touched execution modules and proof runner.
+- Guarded testnet proof succeeded: one tiny ETH IOC short opened, the reduce-only close submitted/filled, and the final exchange snapshot was flat.
+
+---
+
 ## 2026-08-11 - Add guarded testnet proof runner
 
 Codex added the next live-like proof slice for reconciliation and reduce-only close mechanics.

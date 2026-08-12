@@ -86,6 +86,23 @@ def _render_status(status: dict) -> str:
         )
     else:
         lines.append("- not run")
+    orders_sent = status.get("orders_sent") or []
+    if orders_sent:
+        lines.extend(["", "## Order Proof", ""])
+        for order in orders_sent:
+            request = order.get("request") or {}
+            response = order.get("response") or {}
+            response_status = response.get("status") or response.get("response", {}).get("status") or ""
+            lines.append(
+                f"- {order.get('type')}: `{request.get('name') or request.get('symbol')}` "
+                f"size `{request.get('sz') or request.get('size_coin')}` "
+                f"limit `{request.get('limit_px', '')}` status `{response_status}`"
+            )
+    after_close = status.get("after_close") or {}
+    if after_close:
+        lines.extend(["", "## After Close", ""])
+        lines.append(f"- Positions: `{len(after_close.get('positions') or [])}`")
+        lines.append(f"- Open orders: `{len(after_close.get('orders') or [])}`")
     return "\n".join(lines) + "\n"
 
 

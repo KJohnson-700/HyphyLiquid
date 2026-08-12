@@ -50,6 +50,7 @@ from src.risk import (
     RiskState,
     RiskVerdict,
 )
+from src.execution.pricing import round_to_tick
 from src.strategy.cascade import CascadeSignal, SignalDirection
 
 logger = logging.getLogger(__name__)
@@ -180,9 +181,7 @@ class OrderManager:
         # v1 only: BTC and ETH. Other symbols (SOL/HYPE/DOGE/BNB) are
         # research-only per the spec; OrderManager refuses to trade them
         # (see _v1_allowlist below).
-        ticks = {"BTC": 1.0, "ETH": 0.1}
-        tick = ticks.get(symbol, 0.01)
-        return round(round(price / tick) * tick, 6)
+        return round_to_tick(symbol, price)
 
     def _asset_meta(self, symbol: str) -> dict:
         """Return Hyperliquid metadata for a symbol when available."""

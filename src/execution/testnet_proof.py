@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.execution.position_supervisor import ReduceOnlyCloseIntent, execute_reduce_only_close
+from src.execution.pricing import aggressive_ioc_limit_px
 from src.execution.reconciler import ExchangeSnapshot, build_exchange_snapshot, reconcile
 
 
@@ -187,7 +188,7 @@ def build_ioc_order(
     if normalized_side not in {"long", "short"}:
         raise ValueError("side must be long or short")
     is_buy = normalized_side == "long"
-    limit_px = _aggressive_px(mark_px, is_buy, slippage_bps)
+    limit_px = aggressive_ioc_limit_px(symbol, mark_px, is_buy, slippage_bps)
     return {
         "name": symbol.upper(),
         "is_buy": is_buy,
@@ -204,13 +205,6 @@ def _mid_for(info: Any, symbol: str) -> float:
     if mid <= 0:
         raise ValueError(f"invalid mid for {symbol}: {mid}")
     return mid
-
-
-def _aggressive_px(mark_px: float, is_buy: bool, slippage_bps: float) -> float:
-    slip = max(0.0, slippage_bps) / 10_000.0
-    if is_buy:
-        return round(mark_px * (1.0 + slip), 6)
-    return round(mark_px * (1.0 - slip), 6)
 
 
 def utc_now_iso() -> str:

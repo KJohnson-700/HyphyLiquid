@@ -133,8 +133,19 @@ class TestPositionSupervisor(unittest.TestCase):
         self.assertEqual(args[0], "ETH")
         self.assertTrue(args[1])
         self.assertEqual(args[2], 1.25)
+        self.assertEqual(args[3], 3003.0)
         self.assertEqual(args[4], {"limit": {"tif": "Ioc"}})
         self.assertTrue(kwargs["reduce_only"])
+
+    def test_execute_reduce_only_close_rounds_fallback_price_to_eth_tick(self):
+        exchange = FakeExchange()
+        decision = build_timeout_decision(_managed(), now=_ts("2026-08-11T02:00:00+00:00"))
+
+        result = execute_reduce_only_close(exchange, decision.close_intent, mark_px=1886.7, slippage_bps=20)
+
+        self.assertTrue(result.submitted)
+        args, _kwargs = exchange.orders[0]
+        self.assertEqual(args[3], 1890.5)
 
     def test_latest_open_eth_ignores_closed_positions(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -15,6 +15,7 @@ from typing import Any
 from src.execution.order_manager import V1_TRADE_SYMBOLS
 from src.execution.paper_broker import PaperBracket, PaperPosition
 from src.execution.paper_intents import ACTIVE_EXECUTION_LANE
+from src.execution.pricing import aggressive_ioc_limit_px
 
 
 @dataclass(frozen=True)
@@ -129,7 +130,7 @@ def execute_reduce_only_close(
         else:
             if mark_px is None or mark_px <= 0:
                 return CloseResult(False, "rejected", error="mark_px is required for IOC close fallback")
-            limit_px = _aggressive_close_px(mark_px, intent.is_buy, slippage_bps)
+            limit_px = aggressive_ioc_limit_px(intent.symbol, mark_px, intent.is_buy, slippage_bps)
             response = exchange.order(
                 intent.symbol,
                 intent.is_buy,
@@ -210,13 +211,6 @@ def _call_market_close(exchange: Any, intent: ReduceOnlyCloseIntent) -> Any:
         return exchange.market_close(intent.symbol, intent.size_coin)
     except TypeError:
         return exchange.market_close(intent.symbol, sz=intent.size_coin)
-
-
-def _aggressive_close_px(mark_px: float, is_buy: bool, slippage_bps: float) -> float:
-    slip = max(0.0, slippage_bps) / 10_000.0
-    if is_buy:
-        return round(mark_px * (1.0 + slip), 6)
-    return round(mark_px * (1.0 - slip), 6)
 
 
 def _load_position_rows(data_dir: Path) -> list[dict]:

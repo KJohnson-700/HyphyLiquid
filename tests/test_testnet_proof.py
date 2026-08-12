@@ -85,6 +85,16 @@ class TestTestnetProof(unittest.TestCase):
         self.assertEqual(order["limit_px"], 2997.0)
         self.assertEqual(order["order_type"], {"limit": {"tif": "Ioc"}})
 
+    def test_build_ioc_order_rounds_eth_to_tick(self):
+        order = build_ioc_order(symbol="ETH", side="short", size_coin=0.01, mark_px=1886.7, reduce_only=False, slippage_bps=20)
+
+        self.assertEqual(order["limit_px"], 1882.9)
+
+    def test_build_ioc_order_rounds_btc_to_integer_tick(self):
+        order = build_ioc_order(symbol="BTC", side="long", size_coin=0.001, mark_px=119432.4, reduce_only=False, slippage_bps=20)
+
+        self.assertEqual(order["limit_px"], 119671.0)
+
     def test_fetch_only_proof_reconciles_flat_account(self):
         result = run_fetch_only_proof(FakeInfo(), user="0xabc")
 
