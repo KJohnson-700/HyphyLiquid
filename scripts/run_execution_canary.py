@@ -23,6 +23,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 STATUS_JSON = DATA_DIR / "execution_canary_status.json"
 STATUS_MD = DATA_DIR / "execution_canary_status.md"
 LIVE_ARM_ENV = "HYPHYLIQUID_LIVE_TRADING_ENABLED"
+TESTNET_PROOF_JSON = "testnet_proof_status.json"
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,20 @@ def _render_status(status: dict) -> str:
         )
     else:
         lines.append("- skipped")
+    proof_gate = status.get("execution_proof_gate") or {}
+    lines.extend(["", "## Execution Proof Gate", ""])
+    if proof_gate:
+        lines.extend(
+            [
+                f"- Passed: `{proof_gate.get('passed')}`",
+                f"- Reason: {proof_gate.get('reason')}",
+                f"- Proof status: `{proof_gate.get('proof_status', '')}`",
+                f"- Protective stop visible: `{proof_gate.get('protective_stop_visible', '')}`",
+                f"- Final positions/orders: `{proof_gate.get('after_cleanup_positions', '')}` / `{proof_gate.get('after_cleanup_orders', '')}`",
+            ]
+        )
+    else:
+        lines.append("- skipped")
     audit = status.get("audit") or {}
     lines.extend(["", "## Audit", ""])
     if audit:
@@ -160,11 +175,13 @@ def run_paper_canary(*, max_new: int, recent: int) -> dict:
     eth_intent_preview = build_latest_eth_intent_preview(DATA_DIR)
     timeout_supervisor_preview = build_latest_eth_timeout_preview(DATA_DIR)
     reconciliation = build_reconciliation_preview(DATA_DIR)
+    execution_proof_gate = build_execution_proof_gate(DATA_DIR)
     return {
         "paper_pass": paper_pass,
         "eth_intent_preview": eth_intent_preview,
         "timeout_supervisor_preview": timeout_supervisor_preview,
         "reconciliation": reconciliation,
+        "execution_proof_gate": execution_proof_gate,
         "audit": {
             "decisions": audit["decision_summary"]["total"],
             "opened": audit["opened_positions"],
@@ -176,17 +193,64 @@ def run_paper_canary(*, max_new: int, recent: int) -> dict:
     }
 
 
+def build_execution_proof_gate(data_dir: Path) -> dict:
+    """Return whether the latest testnet proof clears live-like protection gating."""
+    path = data_dir / TESTNET_PROOF_JSON
+    if not path.exists():
+        return {
+            "passed": False,
+            "reason": f"{TESTNET_PROOF_JSON} is missing; run guarded bracket proof first",
+            "path": str(path),
+        }
+    try:
+        status = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        return {
+            "passed": False,
+            "reason": f"{TESTNET_PROOF_JSON} is not valid JSON: {exc}",
+            "path": str(path),
+        }
+
+    after_cleanup = status.get("after_cleanup") or status.get("after_close") or {}
+    positions = after_cleanup.get("positions") or []
+    orders = after_cleanup.get("orders") or []
+    checks = {
+        "mode_is_bracket": status.get("mode") == "execute_testnet_bracket",
+        "status_passed": status.get("status") == "bracket_proof_passed",
+        "protective_stop_visible": status.get("protective_stop_visible") is True,
+        "flat_after_cleanup": len(positions) == 0,
+        "no_open_orders_after_cleanup": len(orders) == 0,
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    return {
+        "passed": not failed,
+        "reason": "latest guarded bracket proof passed" if not failed else f"proof gate failed: {', '.join(failed)}",
+        "path": str(path),
+        "proof_generated_at": status.get("generated_at"),
+        "proof_mode": status.get("mode"),
+        "proof_status": status.get("status"),
+        "protective_stop_visible": status.get("protective_stop_visible"),
+        "after_cleanup_positions": len(positions),
+        "after_cleanup_orders": len(orders),
+        "checks": checks,
+    }
+
+
 def build_status(*, mode: str, guard: LiveGuard, paper_payload: dict | None = None) -> dict:
     """Build the persisted canary status payload."""
     paper_payload = paper_payload or {}
     anomalies = (paper_payload.get("audit") or {}).get("anomalies", 0)
     reconciliation_blocking = bool((paper_payload.get("reconciliation") or {}).get("blocking", False))
+    proof_gate = paper_payload.get("execution_proof_gate") or build_execution_proof_gate(DATA_DIR)
+    proof_blocking = not bool(proof_gate.get("passed", False))
     if mode == "live" and not guard.allowed:
         next_action = "Live mode refused by guard; run paper canary or arm deliberately after review."
     elif anomalies:
         next_action = "Paper audit has anomalies; fix those before any live canary."
     elif reconciliation_blocking:
         next_action = "Reconciliation is blocking; do not supervise or place live orders until resolved."
+    elif proof_blocking:
+        next_action = "Execution proof gate is blocking; rerun guarded bracket proof before live-like promotion."
     elif mode == "paper":
         next_action = "Paper canary completed; review audit, then keep daemon running for fresh live-like decisions."
     else:
@@ -199,6 +263,7 @@ def build_status(*, mode: str, guard: LiveGuard, paper_payload: dict | None = No
         "eth_intent_preview": paper_payload.get("eth_intent_preview"),
         "timeout_supervisor_preview": paper_payload.get("timeout_supervisor_preview"),
         "reconciliation": paper_payload.get("reconciliation"),
+        "execution_proof_gate": proof_gate,
         "audit": paper_payload.get("audit"),
         "next_action": next_action,
     }

@@ -4,6 +4,27 @@
 
 ---
 
+## 2026-08-12 - Gate canary status on bracket proof
+
+Codex wired the successful testnet bracket proof into the execution canary gate.
+
+**What changed**
+- `scripts/run_execution_canary.py` now reads `data/testnet_proof_status.json` and builds an `execution_proof_gate` block.
+- The gate requires `mode=execute_testnet_bracket`, `status=bracket_proof_passed`, `protective_stop_visible=true`, and final cleanup with zero positions and zero open orders.
+- Canary markdown now surfaces proof gate status, protective-stop visibility, and final flat/open-order state.
+- Canary next action now fails closed if the bracket proof is missing, stale/weak, or did not end flat.
+- Added unit tests for passing bracket proof, missing/weak proof, and proof-gate blocking in status.
+
+**Verification**
+- Focused suite: `44/44` passing across execution canary, testnet proof, position supervisor, reconciler, and paper intents.
+- Compile pass clean for the canary script and tests.
+- Paper canary run completed with execution proof gate passing against the latest real testnet bracket proof.
+
+**Decision**
+- Live-like promotion is now blocked unless the latest testnet proof demonstrates visible reduce-only protection and clean flattening. This is infrastructure gating, not strategy promotion.
+
+---
+
 ## 2026-08-12 - Add guarded bracket/protective-stop proof
 
 Codex added and verified the next testnet safety proof: tiny ETH entry plus visible reduce-only protective stop.
