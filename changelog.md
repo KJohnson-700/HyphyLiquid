@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-08-11 - Add exchange reconciliation safety layer
+
+Codex added the local-vs-Hyperliquid reconciliation layer required before live-like supervision can safely manage real positions.
+
+**What changed**
+- Added `src/execution/reconciler.py` to normalize Hyperliquid `user_state` and open-order responses into exchange positions/orders.
+- The reconciler compares local managed ETH state against exchange state and blocks on exchange-only positions, local-only positions, side/size mismatches, missing protective stops, multiple v1 positions, or any non-v1 exposure.
+- Added `scripts/run_reconciliation_check.py` for offline local checks by default and optional SDK-backed `--fetch-exchange` checks.
+- `scripts/run_execution_canary.py` now includes reconciliation status in the canary artifact.
+- Added `tests/test_reconciler.py` and extended the execution canary tests.
+
+**Decision**
+- The timeout supervisor may only act after reconciliation is clean. Missing exchange snapshots are treated as `do_not_live_trade` for live purposes, even though paper canary can still run.
+
+---
+
 ## 2026-08-11 - Add ETH timeout position supervisor
 
 Codex started the live-like bot architecture build by adding a deterministic position lifecycle supervisor.

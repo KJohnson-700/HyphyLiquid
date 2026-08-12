@@ -114,6 +114,19 @@ def _render_status(status: dict) -> str:
         )
     else:
         lines.append("- skipped")
+    reconciliation = status.get("reconciliation") or {}
+    lines.extend(["", "## Reconciliation", ""])
+    if reconciliation:
+        lines.extend(
+            [
+                f"- Status: `{reconciliation.get('status', '')}`",
+                f"- Action: `{reconciliation.get('action', '')}`",
+                f"- Blocking: `{reconciliation.get('blocking', '')}`",
+                f"- Findings: `{len(reconciliation.get('findings') or [])}`",
+            ]
+        )
+    else:
+        lines.append("- skipped")
     audit = status.get("audit") or {}
     lines.extend(["", "## Audit", ""])
     if audit:
@@ -139,16 +152,19 @@ def run_paper_canary(*, max_new: int, recent: int) -> dict:
     from scripts.run_paper_audit import build_audit, write_audit
     from src.execution.paper_intents import build_latest_eth_intent_preview
     from src.execution.position_supervisor import build_latest_eth_timeout_preview
+    from src.execution.reconciler import build_reconciliation_preview
 
     paper_pass = run_once(max_new=max_new)
     audit = build_audit(DATA_DIR, recent_limit=recent)
     _, md_path = write_audit(audit, DATA_DIR)
     eth_intent_preview = build_latest_eth_intent_preview(DATA_DIR)
     timeout_supervisor_preview = build_latest_eth_timeout_preview(DATA_DIR)
+    reconciliation = build_reconciliation_preview(DATA_DIR)
     return {
         "paper_pass": paper_pass,
         "eth_intent_preview": eth_intent_preview,
         "timeout_supervisor_preview": timeout_supervisor_preview,
+        "reconciliation": reconciliation,
         "audit": {
             "decisions": audit["decision_summary"]["total"],
             "opened": audit["opened_positions"],
@@ -164,10 +180,13 @@ def build_status(*, mode: str, guard: LiveGuard, paper_payload: dict | None = No
     """Build the persisted canary status payload."""
     paper_payload = paper_payload or {}
     anomalies = (paper_payload.get("audit") or {}).get("anomalies", 0)
+    reconciliation_blocking = bool((paper_payload.get("reconciliation") or {}).get("blocking", False))
     if mode == "live" and not guard.allowed:
         next_action = "Live mode refused by guard; run paper canary or arm deliberately after review."
     elif anomalies:
         next_action = "Paper audit has anomalies; fix those before any live canary."
+    elif reconciliation_blocking:
+        next_action = "Reconciliation is blocking; do not supervise or place live orders until resolved."
     elif mode == "paper":
         next_action = "Paper canary completed; review audit, then keep daemon running for fresh live-like decisions."
     else:
@@ -179,6 +198,7 @@ def build_status(*, mode: str, guard: LiveGuard, paper_payload: dict | None = No
         "paper_pass": paper_payload.get("paper_pass"),
         "eth_intent_preview": paper_payload.get("eth_intent_preview"),
         "timeout_supervisor_preview": paper_payload.get("timeout_supervisor_preview"),
+        "reconciliation": paper_payload.get("reconciliation"),
         "audit": paper_payload.get("audit"),
         "next_action": next_action,
     }

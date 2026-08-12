@@ -51,12 +51,14 @@ class TestExecutionCanaryGuard(unittest.TestCase):
                 "paper_pass": {"decisions_written": 1},
                 "eth_intent_preview": {"eligible": True, "lane": "eth_funding_context_follow"},
                 "timeout_supervisor_preview": {"eligible": True, "action": "hold"},
+                "reconciliation": {"status": "skipped", "blocking": False},
             },
         )
 
         self.assertTrue(status["eth_intent_preview"]["eligible"])
         self.assertEqual(status["eth_intent_preview"]["lane"], "eth_funding_context_follow")
         self.assertEqual(status["timeout_supervisor_preview"]["action"], "hold")
+        self.assertFalse(status["reconciliation"]["blocking"])
 
 
 if __name__ == "__main__":

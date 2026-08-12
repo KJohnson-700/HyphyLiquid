@@ -133,7 +133,7 @@ For now, a stable VPS close to good network routes is more useful than a VPN.
 ## Build Order
 
 1. Position supervisor timeout close preview.
-2. Live state reconciliation read: open position, open orders, stop order existence.
+2. Live state reconciliation read: open position, open orders, stop order existence. Added 2026-08-11 in `src/execution/reconciler.py`.
 3. Reduce-only timeout close dry-run/testnet proof.
 4. AI exit advisory packet, fail-closed.
 5. Paper loop uses supervisor status.
