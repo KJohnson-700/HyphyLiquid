@@ -4,6 +4,25 @@
 
 ---
 
+## 2026-08-12 - Add live-like readiness rollup
+
+Codex added a blunt PASS/HOLD/BLOCK readiness command for the bot build.
+
+**What changed**
+- Added `scripts/check_live_like_readiness.py` to combine execution canary, bracket proof gate, paper audit, reconciliation, ETH intent preview, timeout supervisor, and paper processing into one verdict.
+- Added `data/live_like_readiness_status.json/md` output for the current operator-facing state.
+- Added tests for PASS, HOLD, and BLOCK rollups.
+
+**Verification**
+- Focused suite: `47/47` passing across readiness, execution canary, testnet proof, position supervisor, reconciler, and paper intents.
+- Compile pass clean for the readiness script and tests.
+- Current readiness run returns `HOLD`, not `BLOCK`: proof gate passes, paper audit has no anomalies, but 2 paper positions remain open and exchange reconciliation is skipped for paper mode.
+
+**Decision**
+- The next operational step is to continue the paper/live-like loop until open paper positions resolve, then rerun readiness. This script is now the preferred "what now?" status command.
+
+---
+
 ## 2026-08-12 - Gate canary status on bracket proof
 
 Codex wired the successful testnet bracket proof into the execution canary gate.
