@@ -23,12 +23,17 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import requests
 
 INFO_URL = "https://api.hyperliquid.xyz/info"
-SYMBOLS = ("BTC", "ETH", "SOL", "HYPE", "DOGE", "BNB")
-# HIP-3 (xyz: builder DEX) probe symbols — research-only, no execution.
+SYMBOLS = ("BTC", "ETH", "SOL", "HYPE")
+# HIP-3 (xyz: builder DEX) symbols — research-only, no execution.
 # These need a separate metaAndAssetCtxs call with dex="xyz" since the
 # default endpoint only returns the native perp universe.
+# Updated 2026-08-22: dropped DOGE/BNB, added 9 new RWA names.
 HIP3_DEX = "xyz"
-HIP3_SYMBOLS = ("xyz:GOLD", "xyz:SILVER")
+HIP3_SYMBOLS = (
+    "xyz:GOLD", "xyz:SILVER", "xyz:NVDA", "xyz:MSFT",
+    "xyz:SP500", "xyz:CL", "xyz:MU", "xyz:MSTR",
+    "xyz:BRENTOIL", "xyz:COIN", "xyz:GOOGL",
+)
 # 1 min cadence — needed to compute OI delta inside the 1-5 min
 # `liquidation_fade_or_follow` wait window. 5 min was too coarse.
 INTERVAL_S = 60

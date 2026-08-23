@@ -35,10 +35,16 @@ import websocket  # from hyperliquid SDK's deps
 
 WS_URL = "wss://api.hyperliquid.xyz/ws"
 # v1 trade symbols (active execution): BTC, ETH
-# research symbols (data collection only): SOL, HYPE, DOGE, BNB
-# hip3 probe (2026-08-03): xyz:GOLD, xyz:SILVER — research-only, no execution.
+# research symbols (data collection only): SOL, HYPE
+# HIP-3 RWA symbols (xyz: deployer): 11 names added 2026-08-22
+# DOGE/BNB dropped 2026-08-22 (0 paper trades over 19 days, dead capital)
 # Hyperliquid HIP-3 names use a lowercase dex prefix and uppercase market.
-SYMBOLS = ("BTC", "ETH", "SOL", "HYPE", "DOGE", "BNB", "xyz:GOLD", "xyz:SILVER")
+SYMBOLS = (
+    "BTC", "ETH", "SOL", "HYPE",
+    "xyz:GOLD", "xyz:SILVER", "xyz:NVDA", "xyz:MSFT",
+    "xyz:SP500", "xyz:CL", "xyz:MU", "xyz:MSTR",
+    "xyz:BRENTOIL", "xyz:COIN", "xyz:GOOGL",
+)
 RECONNECT_DELAY_S = 5
 DATA_ROOT = PROJECT_ROOT / "data"
 
