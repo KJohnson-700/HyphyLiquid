@@ -38,6 +38,7 @@ from src.strategy.graduation import (  # noqa: E402
 FADE_DETAIL = PROJECT_ROOT / "data" / "strategy_search" / "detail_funding_neg_fade.json"
 PAPER_TRADES = PROJECT_ROOT / "data" / "paper_trades.jsonl"
 FADE_POSITIONS = PROJECT_ROOT / "data" / "paper_funding_neg_fade_positions.jsonl"
+TRADE_REGIMES = PROJECT_ROOT / "data" / "trade_regimes.json"
 OUT_JSON = PROJECT_ROOT / "data" / "graduation_scorecard.json"
 
 
@@ -57,6 +58,13 @@ def load_fade_backtest() -> list[ClosedTrade]:
     return out
 
 
+def load_regimes() -> dict[str, str]:
+    """trade id -> regime label, produced by scripts/label_trade_regimes.py."""
+    if not TRADE_REGIMES.exists():
+        return {}
+    return {k: v.get("regime", "") for k, v in json.loads(TRADE_REGIMES.read_text()).items()}
+
+
 def load_fade_forward_paper() -> list[ClosedTrade]:
     """Closed forward-paper round-trips from the funding-negative fade lane.
 
@@ -66,6 +74,7 @@ def load_fade_forward_paper() -> list[ClosedTrade]:
     """
     if not FADE_POSITIONS.exists():
         return []
+    regimes = load_regimes()
     out: list[ClosedTrade] = []
     for line in FADE_POSITIONS.open():
         line = line.strip()
@@ -84,7 +93,7 @@ def load_fade_forward_paper() -> list[ClosedTrade]:
             symbol=d.get("symbol", "?"), lane="funding_neg_fade",
             net_return_pct=float(d["net_pnl_usd"]) / notional * 100.0,
             source="forward_paper", entry_ts=str(d.get("entry_ts", "")),
-            regime=str(d.get("regime", "")),
+            regime=regimes.get(d.get("paper_id") or d.get("decision_id", ""), ""),
         ))
     return out
 
