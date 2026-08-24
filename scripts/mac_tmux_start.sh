@@ -44,6 +44,10 @@ DAEMONS=(
   "ws:collect_ws_data.py"
   "liq:liquidation_monitor.py"
   "ctx:poll_asset_ctx.py"
+  # The five above only COLLECT data. This one runs the strategy that is
+  # actually up for promotion, in paper mode — without it the fade lane
+  # never accumulates trades and no asset can reach Gate 2.
+  "fade:fade_paper_daemon.py"
 )
 
 # ---- preflight ---------------------------------------------------------------

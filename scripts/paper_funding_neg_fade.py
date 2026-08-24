@@ -329,6 +329,13 @@ def mode_paper(symbol_filter: list[str] | None = None) -> None:
         except Exception as e:
             print(f"  {sym}: load failed: {e}")
             continue
+        if sym not in PER_ASSET_POLICY:
+            # No calibrated stop/tp for this symbol yet. Skip rather than
+            # crash the whole run — ALL_SYMBOLS includes research names
+            # that have never been calibrated, and an uncalibrated symbol
+            # must not be paper-traded at a guessed size.
+            print(f"  {sym}: no PER_ASSET_POLICY entry, skipping")
+            continue
         policy = PER_ASSET_POLICY[sym]
         sig = signal_funding_neg_fade(df, funding_col="funding_actual", neg_threshold=NEG_THRESHOLD)
         closes = df["close"].values
@@ -692,6 +699,13 @@ def mode_live(symbol_filter: list[str] | None = None) -> None:
             df, label = load_hl_with_funding(sym)
         except Exception as e:
             print(f"  {sym}: load failed: {e}")
+            continue
+        if sym not in PER_ASSET_POLICY:
+            # No calibrated stop/tp for this symbol yet. Skip rather than
+            # crash the whole run — ALL_SYMBOLS includes research names
+            # that have never been calibrated, and an uncalibrated symbol
+            # must not be paper-traded at a guessed size.
+            print(f"  {sym}: no PER_ASSET_POLICY entry, skipping")
             continue
         policy = PER_ASSET_POLICY[sym]
 
@@ -1303,6 +1317,13 @@ def mode_live_trading() -> None:
             df, _ = load_hl_with_funding(sym)
         except Exception as e:
             print(f"  {sym}: load failed: {e}")
+            continue
+        if sym not in PER_ASSET_POLICY:
+            # No calibrated stop/tp for this symbol yet. Skip rather than
+            # crash the whole run — ALL_SYMBOLS includes research names
+            # that have never been calibrated, and an uncalibrated symbol
+            # must not be paper-traded at a guessed size.
+            print(f"  {sym}: no PER_ASSET_POLICY entry, skipping")
             continue
         policy = PER_ASSET_POLICY[sym]
         sig = signal_funding_neg_fade(df, funding_col="funding_actual", neg_threshold=NEG_THRESHOLD)
