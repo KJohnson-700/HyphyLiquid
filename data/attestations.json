@@ -1,0 +1,16 @@
+{
+  "HYPE:funding_neg_fade": {
+    "logic_makes_market_sense": {
+      "at": "2026-08-24T21:14:05+00:00",
+      "by": "kslim",
+      "note": "negative funding pays the long side to hold; fading it is the carry side of the trade, not a fitted parameter"
+    }
+  },
+  "SOL:funding_neg_fade": {
+    "logic_makes_market_sense": {
+      "at": "2026-08-24T21:14:05+00:00",
+      "by": "kslim",
+      "note": "negative funding pays the long side to hold; fading it is the carry side of the trade, not a fitted parameter"
+    }
+  }
+}

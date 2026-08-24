@@ -14,15 +14,26 @@ decision-path tests, intentional allowlist promotion, acceptable drawdown)
 cannot be derived from returns. They are attestations supplied via
 --attest SYMBOL:LANE:field. Unattested means FAIL, never a silent pass.
 
+Attestations persist to data/attestations.json with who attested and when. A
+promotion is a decision someone made and has to stay on the record; if it only
+lived for one invocation the lane would silently fall back to RESEARCH_ONLY on
+the next run and the ladder would mean nothing.
+
 Usage:
   python3 scripts/graduation_scorecard.py
   python3 scripts/graduation_scorecard.py --attest HYPE:funding_neg_fade:logic_makes_market_sense
+  python3 scripts/graduation_scorecard.py --attest SOL:funding_neg_fade:logic_makes_market_sense \
+      --attested-by kslim --note "funding pays longs to hold; fade is the carry side"
+  python3 scripts/graduation_scorecard.py --revoke SOL:funding_neg_fade:logic_makes_market_sense
+  python3 scripts/graduation_scorecard.py --show-attestations
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -35,6 +46,7 @@ from src.strategy.graduation import (  # noqa: E402
     score_all,
 )
 
+ATTEST_PATH = PROJECT_ROOT / "data" / "attestations.json"
 FADE_DETAIL = PROJECT_ROOT / "data" / "strategy_search" / "detail_funding_neg_fade.json"
 PAPER_TRADES = PROJECT_ROOT / "data" / "paper_trades.jsonl"
 FADE_POSITIONS = PROJECT_ROOT / "data" / "paper_funding_neg_fade_positions.jsonl"
@@ -119,24 +131,107 @@ def load_forward_paper() -> list[ClosedTrade]:
     return out
 
 
+def load_attestations() -> dict:
+    """Stored attestations: {"SYMBOL:LANE": {field: {by, at, note}}}."""
+    if not ATTEST_PATH.exists():
+        return {}
+    try:
+        return json.loads(ATTEST_PATH.read_text())
+    except Exception as e:
+        # Never silently treat a corrupt store as "nothing attested" -- that
+        # would quietly demote every promoted lane.
+        print(f"ERROR: {ATTEST_PATH} is unreadable ({e}); refusing to score with "
+              f"attestations silently dropped", file=sys.stderr)
+        raise SystemExit(2)
+
+
+def save_attestations(store: dict) -> None:
+    ATTEST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ATTEST_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(store, indent=2, sort_keys=True))
+    tmp.replace(ATTEST_PATH)
+
+
+def to_attestation_objs(store: dict) -> dict:
+    out: dict[tuple[str, str], Attestations] = {}
+    for key, fields in store.items():
+        try:
+            sym, lane = key.split(":", 1)
+        except ValueError:
+            continue
+        a = Attestations()
+        for field in fields:
+            if hasattr(a, field):
+                setattr(a, field, True)
+        out[(sym, lane)] = a
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--attest", action="append", default=[],
                     metavar="SYMBOL:LANE:FIELD")
+    ap.add_argument("--revoke", action="append", default=[],
+                    metavar="SYMBOL:LANE:FIELD",
+                    help="withdraw a stored attestation")
+    ap.add_argument("--attested-by", default=os.getenv("USER", "unknown"),
+                    help="who is making the call (default: $USER)")
+    ap.add_argument("--note", default="",
+                    help="why the gate is satisfied; stored with the attestation")
+    ap.add_argument("--show-attestations", action="store_true",
+                    help="print the stored attestations and exit")
     args = ap.parse_args()
 
-    att: dict[tuple[str, str], Attestations] = {}
+    store = load_attestations()
+
+    if args.show_attestations:
+        if not store:
+            print("no attestations recorded")
+            return 0
+        for key in sorted(store):
+            print(key)
+            for field, meta in sorted(store[key].items()):
+                note = f"  -- {meta['note']}" if meta.get("note") else ""
+                print(f"  {field}: {meta.get('by','?')} at {meta.get('at','?')}{note}")
+        return 0
+
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    dirty = False
+
+    for spec in args.revoke:
+        try:
+            sym, lane, field = spec.split(":", 2)
+        except ValueError:
+            print(f"bad --revoke {spec!r}, want SYMBOL:LANE:FIELD", file=sys.stderr)
+            return 2
+        key = f"{sym}:{lane}"
+        if store.get(key, {}).pop(field, None) is not None:
+            print(f"revoked {field} for {key}")
+            dirty = True
+        else:
+            print(f"{field} was not attested for {key}")
+
     for spec in args.attest:
         try:
             sym, lane, field = spec.split(":", 2)
         except ValueError:
             print(f"bad --attest {spec!r}, want SYMBOL:LANE:FIELD", file=sys.stderr)
             return 2
-        a = att.setdefault((sym, lane), Attestations())
-        if not hasattr(a, field):
+        if not hasattr(Attestations(), field):
             print(f"unknown attestation field: {field}", file=sys.stderr)
             return 2
-        setattr(a, field, True)
+        key = f"{sym}:{lane}"
+        store.setdefault(key, {})[field] = {
+            "by": args.attested_by, "at": now, "note": args.note,
+        }
+        print(f"attested {field} for {key}  (by {args.attested_by} at {now})")
+        dirty = True
+
+    if dirty:
+        save_attestations(store)
+        print(f"wrote {ATTEST_PATH}\n")
+
+    att = to_attestation_objs(store)
 
     trades = load_fade_backtest() + load_fade_forward_paper() + load_forward_paper()
     if not trades:

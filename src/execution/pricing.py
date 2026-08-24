@@ -6,6 +6,11 @@ V1_PRICE_TICKS: dict[str, float] = {
     "BTC": 1.0,
     "ETH": 0.1,
     "HYPE": 0.001,
+    # Verified 2026-08-24 from the live L2 book: min gap between adjacent
+    # levels 0.001, all quotes 3dp, spread 0.10bps. Present so the fade lane
+    # rounds correctly in paper; SOL is still absent from V1_TRADE_SYMBOLS and
+    # this does not authorise trading it.
+    "SOL": 0.001,
 }
 
 

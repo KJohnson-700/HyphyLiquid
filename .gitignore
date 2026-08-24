@@ -49,7 +49,12 @@ config/settings.yaml
 *~
 
 # Project (volatile / non-source)
-data/
+# data/* rather than data/ so the graduation attestations can be re-included:
+# git cannot un-ignore a file whose parent directory is excluded.
+data/*
+# Attestations are governance records -- who cleared which gate and when --
+# not bulk capture. They must survive a data wipe and reach the other machine.
+!data/attestations.json
 logs/
 *.log
 *.db
