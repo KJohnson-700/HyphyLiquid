@@ -20,13 +20,16 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import pandas as pd
 
+import sys as _sys; _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.data_files import iter_data_files, open_data_file, open_data_file_binary, data_stem
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WS_CANDLE_DIR = PROJECT_ROOT / "data" / "ws_candle"
 OUT_FILE = PROJECT_ROOT / "data" / "candle_panel.csv"
 
 
 def _symbol_from_stem(stem: str) -> str:
-    m = re.match(r"^([a-z]+)_([a-z]+)_(\d{4}-\d{2}-\d{2})$", stem)
+    m = re.match(r"^([a-z]+)_([a-z0-9]+)_(\d{4}-\d{2}-\d{2})$", stem)
     if m:
         return f"xyz:{m.group(2).upper()}"
     return stem.split("_")[0].upper()
@@ -37,11 +40,11 @@ def _aggregate_file(f: Path) -> list[dict]:
 
     Per-hour state: open (first), high (max), low (min), close (last), volume (sum).
     """
-    symbol = _symbol_from_stem(f.stem)
+    symbol = _symbol_from_stem(data_stem(f))
     # Per-hour: ts_hour -> [open, high, low, close, volume]
     state: dict = {}
     try:
-        with f.open("r", encoding="utf-8", buffering=1024 * 1024) as fp:
+        with open_data_file(f) as fp:
             for line in fp:
                 # Fast parse: avoid json.loads for performance
                 # Find "t":<num>, "o":<num>, "h":<num>, "l":<num>, "c":<num>, "v":<num>
@@ -108,20 +111,20 @@ def main():
     target_date = args.date or today_utc
 
     if args.full:
-        files = sorted(WS_CANDLE_DIR.glob("*.jsonl"))
+        files = iter_data_files(WS_CANDLE_DIR, "*.jsonl")
         print(f"scanning {len(files)} ws_candle files (full rebuild)...", flush=True)
     else:
         # Incremental: today's + yesterday's files (so we don't miss the latest bar)
         files = sorted(set(
-            list(WS_CANDLE_DIR.glob(f"*_{target_date}.jsonl")) +
-            list(WS_CANDLE_DIR.glob(f"*_{yesterday_utc}.jsonl"))
+            iter_data_files(WS_CANDLE_DIR, f"*_{target_date}.jsonl") +
+            iter_data_files(WS_CANDLE_DIR, f"*_{yesterday_utc}.jsonl")
         ))
         print(f"scanning {len(files)} ws_candle files for {yesterday_utc} + {target_date} (incremental)...", flush=True)
         if not files:
             print(f"  no files, falling back to last 3 days", flush=True)
-            all_dates = sorted({f.stem.split("_")[-1] for f in WS_CANDLE_DIR.glob("*.jsonl")})
+            all_dates = sorted({data_stem(f).split("_")[-1] for f in iter_data_files(WS_CANDLE_DIR, "*.jsonl")})
             for d in all_dates[-3:]:
-                files.extend(WS_CANDLE_DIR.glob(f"*_{d}.jsonl"))
+                files.extend(iter_data_files(WS_CANDLE_DIR, f"*_{d}.jsonl"))
             files = sorted(set(files))
 
     import time

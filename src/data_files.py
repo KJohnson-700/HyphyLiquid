@@ -66,3 +66,30 @@ def iter_jsonl_lines(paths: Iterable[Path]) -> Iterable[str]:
     for path in paths:
         with open_data_file(path, errors="replace") as fh:
             yield from fh
+
+
+def data_stem(path: Path) -> str:
+    """Logical stem, ignoring .gz. btc_2026-08-23.jsonl[.gz] -> btc_2026-08-23.
+
+    Path.stem leaves ".jsonl" behind on a .jsonl.gz file, which silently
+    breaks symbol/date parsing built on stems.
+    """
+    path = Path(path)
+    name = path.name
+    if name.endswith(GZ_SUFFIX):
+        name = name[: -len(GZ_SUFFIX)]
+    return name.rsplit(".", 1)[0]
+
+
+def open_data_file_binary(path: Path):
+    """Binary variant of open_data_file, for byte-level scanners."""
+    path = Path(path)
+    if path.suffix == GZ_SUFFIX:
+        plain, gz = path.with_suffix(""), path
+    else:
+        plain, gz = path, path.with_suffix(path.suffix + GZ_SUFFIX)
+    if plain.exists():
+        return plain.open("rb")
+    if gz.exists():
+        return gzip.open(gz, "rb")
+    raise FileNotFoundError(f"neither {plain} nor {gz} exists")

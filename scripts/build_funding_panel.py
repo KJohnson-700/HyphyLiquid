@@ -19,6 +19,9 @@ import re
 from pathlib import Path
 import pandas as pd
 
+import sys as _sys; _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.data_files import iter_data_files, open_data_file, open_data_file_binary, data_stem
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ASSET_CTX_DIR = PROJECT_ROOT / "data" / "asset_ctx"
 WS_ACTIVE_ASSET_CTX_DIR = PROJECT_ROOT / "data" / "ws_activeAssetCtx"
@@ -30,7 +33,7 @@ def _symbol_from_stem(stem: str) -> str:
     HIP-3: 'xyz_gold_2026-08-04' -> 'xyz:GOLD'
     Regular: 'btc_2026-08-10' -> 'BTC'
     """
-    m = re.match(r"^([a-z]+)_([a-z]+)_(\d{4}-\d{2}-\d{2})$", stem)
+    m = re.match(r"^([a-z]+)_([a-z0-9]+)_(\d{4}-\d{2}-\d{2})$", stem)
     if m:
         return f"xyz:{m.group(2).upper()}"
     return stem.split("_")[0].upper()
@@ -39,14 +42,14 @@ def _symbol_from_stem(stem: str) -> str:
 def _read_rest_asset_ctx() -> list[dict]:
     """Read from data/asset_ctx/ (REST poller, legacy)."""
     rows = []
-    files = sorted(ASSET_CTX_DIR.glob("*.jsonl"))
+    files = iter_data_files(ASSET_CTX_DIR, "*.jsonl")
     if not files:
         return rows
     print(f"  [REST] scanning {len(files)} asset_ctx files...", flush=True)
     for f in files:
-        symbol = _symbol_from_stem(f.stem)
+        symbol = _symbol_from_stem(data_stem(f))
         try:
-            with f.open("r", encoding="utf-8") as fp:
+            with open_data_file(f) as fp:
                 for line in fp:
                     try:
                         rec = json.loads(line)
@@ -85,15 +88,15 @@ def _read_ws_active_asset_ctx() -> list[dict]:
     per-hour panel, use a longer history load.
     """
     rows = []
-    files = sorted(WS_ACTIVE_ASSET_CTX_DIR.glob("*.jsonl"))
+    files = iter_data_files(WS_ACTIVE_ASSET_CTX_DIR, "*.jsonl")
     if not files:
         return rows
     print(f"  [WS] scanning {len(files)} ws_activeAssetCtx files (last 5KB each)...", flush=True)
     TAIL_BYTES = 5000
     for f in files:
-        symbol = _symbol_from_stem(f.stem)
+        symbol = _symbol_from_stem(data_stem(f))
         try:
-            with f.open("rb") as fp:
+            with open_data_file_binary(f) as fp:
                 fp.seek(0, 2)  # seek to end
                 file_size = fp.tell()
                 # Read last TAIL_BYTES (or whole file if smaller)
@@ -150,15 +153,15 @@ def _read_ws_active_asset_ctx() -> list[dict]:
 def _read_ws_active_asset_ctx_full() -> list[dict]:
     """Read all hours from data/ws_activeAssetCtx/. Slow path — only use for full rebuild."""
     rows = []
-    files = sorted(WS_ACTIVE_ASSET_CTX_DIR.glob("*.jsonl"))
+    files = iter_data_files(WS_ACTIVE_ASSET_CTX_DIR, "*.jsonl")
     if not files:
         return rows
     print(f"  [WS-full] scanning {len(files)} ws_activeAssetCtx files (full)...", flush=True)
     for f in files:
-        symbol = _symbol_from_stem(f.stem)
+        symbol = _symbol_from_stem(data_stem(f))
         last_per_hour: dict = {}
         try:
-            with f.open("r", encoding="utf-8") as fp:
+            with open_data_file(f) as fp:
                 for line in fp:
                     try:
                         rec = json.loads(line)
