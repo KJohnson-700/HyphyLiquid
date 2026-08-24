@@ -47,6 +47,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
+
+from src.data_files import open_data_file, data_file_exists, iter_data_files
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from src.strategy.event_features import _canonical_symbol, _file_stem  # noqa: E402
@@ -162,10 +164,10 @@ def _parse_ctx_row(row: dict) -> Optional[dict]:
 def _load_asset_ctx(symbol: str) -> List[dict]:
     rows: List[dict] = []
     stem = _file_stem(symbol)
-    for path in sorted(ASSET_CTX_DIR.glob(f"{stem}_*.jsonl")):
+    for path in iter_data_files(ASSET_CTX_DIR, f"{stem}_*.jsonl"):
         if not path.exists():
             continue
-        with path.open("r", encoding="utf-8") as f:
+        with open_data_file(path) as f:
             for line in f:
                 line = line.strip()
                 if not line:
