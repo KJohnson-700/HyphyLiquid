@@ -2,7 +2,7 @@
 
 These tests DO NOT call the exchange (no real orders placed).
 They cover: ATR calc, size calc, tick rounding, risk rejection paths,
-and the v1 trading allowlist (refuses non-BTC/ETH orders).
+and the v1 trading allowlist.
 """
 from pathlib import Path
 
@@ -52,6 +52,7 @@ class _FakeInfo:
             "universe": [
                 {"name": "BTC", "szDecimals": 5},
                 {"name": "ETH", "szDecimals": 4},
+                {"name": "HYPE", "szDecimals": 2},
             ]
         }
 
@@ -80,13 +81,25 @@ def _short_signal(symbol: str = "BTC", confidence: float = 0.7) -> CascadeSignal
 
 
 def _intent(symbol: str = "BTC", side: str = "long") -> BracketOrderIntent:
+    if symbol == "BTC":
+        entry = 60000.0
+        sl = 59800.0 if side == "long" else 60200.0
+        tp = 60400.0 if side == "long" else 59600.0
+    elif symbol == "HYPE":
+        entry = 80.1234
+        sl = entry * (0.99 if side == "long" else 1.01)
+        tp = entry * (1.01 if side == "long" else 0.99)
+    else:
+        entry = 3000.0
+        sl = entry * (0.99 if side == "long" else 1.01)
+        tp = entry * (1.01 if side == "long" else 0.99)
     return BracketOrderIntent(
         signal_ts=pd.Timestamp("2026-08-01T12:00:00Z"),
         symbol=symbol,
         side=side,
-        entry_px=60000.0 if symbol == "BTC" else 3000.0,
-        sl_px=59800.0 if side == "long" else 60200.0,
-        tp_px=60400.0 if side == "long" else 59600.0,
+        entry_px=entry,
+        sl_px=sl,
+        tp_px=tp,
         notional_usd=3000.0,
         reason="test paper-to-live bracket",
     )
@@ -229,9 +242,8 @@ def test_orphan_entry_attempts_cancel_when_child_order_fails() -> None:
     assert fake.calls[-1] == ("cancel", [{"coin": "BTC", "oid": 100}])
 
 
-def test_v1_allowlist_includes_only_btc_eth() -> None:
-    # v1 trading is BTC/ETH only. Other symbols are research-only.
-    assert V1_TRADE_SYMBOLS == frozenset({"BTC", "ETH"})
+def test_v1_allowlist_includes_promoted_hype() -> None:
+    assert V1_TRADE_SYMBOLS == frozenset({"BTC", "ETH", "HYPE"})
 
 
 def test_refuses_to_trade_sol_research_symbol() -> None:
@@ -266,14 +278,14 @@ def test_refuses_to_trade_doge_research_symbol() -> None:
     assert fake.calls == []
 
 
-def test_btc_and_eth_pass_allowlist() -> None:
+def test_btc_eth_and_hype_pass_allowlist() -> None:
     """Sanity: the v1 symbols do NOT trigger the allowlist guard."""
     fake = _FakeExchange()
     mgr = OrderManager(fake, _FakeInfo(), bankroll=1000.0)
     # We only need to confirm the allowlist doesn't reject. A real ATR
     # rejection is fine; just confirm the status is NOT
     # 'rejected_v1_allowlist'.
-    for sym in ("BTC", "ETH"):
+    for sym in ("BTC", "ETH", "HYPE"):
         sig = CascadeSignal(
             symbol=sym, timestamp=pd.Timestamp("2026-08-01T12:00:00Z"),
             direction=SignalDirection.SHORT, confidence=0.85,
@@ -336,11 +348,23 @@ def test_execute_bracket_intent_refuses_research_symbol() -> None:
     fake = _FakeExchange()
     mgr = OrderManager(fake, _FakeInfo(), bankroll=1000.0)
 
-    result = mgr.execute_bracket_intent(_intent(symbol="HYPE"))
+    result = mgr.execute_bracket_intent(_intent(symbol="SOL"))
 
     assert not result.filled
     assert result.status == "rejected_v1_allowlist"
     assert fake.calls == []
+
+
+def test_execute_bracket_intent_rounds_hype_to_three_decimal_tick() -> None:
+    fake = _FakeExchange()
+    mgr = OrderManager(fake, _FakeInfo(), bankroll=1000.0)
+
+    result = mgr.execute_bracket_intent(_intent(symbol="HYPE"))
+
+    assert result.status != "rejected_v1_allowlist"
+    assert result.entry_px == 80.123
+    assert result.sl_px == 79.322
+    assert result.tp_px == 80.925
 
 
 def test_execute_bracket_intent_rejects_bad_stop_geometry() -> None:
@@ -361,7 +385,7 @@ def test_execute_bracket_intent_risk_rejects_oversized_intent() -> None:
     fake = _FakeExchange()
     mgr = OrderManager(fake, _FakeInfo(), bankroll=1000.0)
     intent = _intent()
-    intent.notional_usd = 10_000.0
+    intent.notional_usd = 9_000.0
     intent.sl_px = 59000.0
 
     result = mgr.execute_bracket_intent(intent)

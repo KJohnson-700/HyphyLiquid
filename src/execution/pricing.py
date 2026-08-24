@@ -5,6 +5,7 @@ from __future__ import annotations
 V1_PRICE_TICKS: dict[str, float] = {
     "BTC": 1.0,
     "ETH": 0.1,
+    "HYPE": 0.001,
 }
 
 

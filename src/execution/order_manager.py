@@ -10,7 +10,7 @@ exist. If entry fills, both TP and SL are live in the same block.
 
 v1 TRADING ALLOWLIST
 --------------------
-v1 only trades BTC and ETH. Other symbols (SOL, HYPE, DOGE, BNB) are
+v1 trades BTC, ETH, and HYPE. Other symbols (SOL and HIP-3 research names) are
 in the passive data collection / research phase per the spec split
 (see AGENTS.md). OrderManager.execute() will REFUSE to place orders
 for any non-v1 symbol — it's a hard guard, not a soft warning.
@@ -26,9 +26,17 @@ Usage:
 from __future__ import annotations
 
 # v1 trading allowlist. OrderManager refuses to execute on anything
-# not in this set. Other symbols (SOL/HYPE/DOGE/BNB) are research-only.
-V1_TRADE_SYMBOLS: frozenset[str] = frozenset({"BTC", "ETH"})
-RESEARCH_SYMBOLS: frozenset[str] = frozenset({"SOL", "HYPE", "DOGE", "BNB", "xyz:GOLD", "xyz:SILVER"})
+# not in this set. Other symbols (SOL/xyz:RWA) are research-only.
+# HYPE promoted 2026-08-20 after PF 2.52 on 17 paper trades.
+# 2026-08-22: dropped DOGE/BNB (0 paper trades over 19 days, dead capital).
+# 2026-08-22: added xyz:NVDA, MSFT, SP500, CL, MU, MSTR, BRENTOIL, COIN, GOOGL.
+V1_TRADE_SYMBOLS: frozenset[str] = frozenset({"BTC", "ETH", "HYPE"})
+RESEARCH_SYMBOLS: frozenset[str] = frozenset({
+    "SOL",
+    "xyz:GOLD", "xyz:SILVER", "xyz:NVDA", "xyz:MSFT",
+    "xyz:SP500", "xyz:CL", "xyz:MU", "xyz:MSTR",
+    "xyz:BRENTOIL", "xyz:COIN", "xyz:GOOGL",
+})
 
 import logging
 import os
@@ -178,9 +186,6 @@ class OrderManager:
         return notional / entry, notional
 
     def _round_to_tick(self, symbol: str, price: float) -> float:
-        # v1 only: BTC and ETH. Other symbols (SOL/HYPE/DOGE/BNB) are
-        # research-only per the spec; OrderManager refuses to trade them
-        # (see _v1_allowlist below).
         return round_to_tick(symbol, price)
 
     def _asset_meta(self, symbol: str) -> dict:
