@@ -76,11 +76,51 @@ COPY (
 """
 
 
+def _merge(con, sql: str, out: Path, *, tz_aware: bool) -> None:
+    """Backfill DuckDB history into an existing panel CSV.
+
+    The jsonl builders only see what the local WS daemons captured since they
+    started, so a panel rebuilt on a fresh box silently loses every hour that
+    predates the daemons. DuckDB holds that history. Live rows win on any
+    overlapping (ts, symbol) because they came from the same feed the strategy
+    will trade against.
+
+    ts formats differ between the two panels (candle naive, funding UTC-aware)
+    and downstream readers depend on that, so each is written back as it was.
+    """
+    import pandas as pd
+
+    hist = con.execute(sql.split(") TO ")[0].replace("COPY (", "", 1)).df()
+    if out.exists():
+        live = pd.read_csv(out)
+    else:
+        live = hist.iloc[0:0]
+
+    def _norm(df):
+        df = df.copy()
+        ts = pd.to_datetime(df["ts"], utc=True)
+        df["ts"] = ts.dt.tz_convert("UTC") if tz_aware else ts.dt.tz_localize(None)
+        return df
+
+    hist, live = _norm(hist), _norm(live)
+    before = len(live)
+    # live last => live wins on overlap
+    combined = pd.concat([hist, live], ignore_index=True)
+    combined = combined.sort_values("ts").drop_duplicates(["ts", "symbol"], keep="last")
+    combined = combined.sort_values(["symbol", "ts"])
+    combined.to_csv(out, index=False)
+    print(f"merged {out.name}: {before} live + {len(hist)} duckdb -> {len(combined)} rows"
+          f"  range={combined['ts'].min()} -> {combined['ts'].max()}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", type=Path, default=DEFAULT_DB)
     ap.add_argument("--min-bars", type=int, default=100,
                     help="warn for symbols under this many hourly bars")
+    ap.add_argument("--merge", action="store_true",
+                    help="backfill into the existing panels instead of replacing "
+                         "them; live rows win on overlapping (ts, symbol)")
     args = ap.parse_args()
 
     if not args.db.exists():
@@ -90,8 +130,12 @@ def main() -> int:
     import duckdb  # local import so the script fails loudly if the dep is absent
 
     con = duckdb.connect(str(args.db), read_only=True)
-    con.execute(CANDLE_SQL.format(out=CANDLE_OUT))
-    con.execute(FUNDING_SQL.format(out=FUNDING_OUT))
+    if args.merge:
+        _merge(con, CANDLE_SQL, CANDLE_OUT, tz_aware=False)
+        _merge(con, FUNDING_SQL, FUNDING_OUT, tz_aware=True)
+    else:
+        con.execute(CANDLE_SQL.format(out=CANDLE_OUT))
+        con.execute(FUNDING_SQL.format(out=FUNDING_OUT))
 
     cov = con.execute("""
         SELECT symbol,

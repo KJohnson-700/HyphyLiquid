@@ -150,6 +150,18 @@ class PaperPosition:
     notes: str = ""
 
 
+def paper_trade_id(symbol: str, entry_ts) -> str:
+    """Stable identity for a simulated trade: symbol + entry bar.
+
+    Paper mode re-walks the entire panel on every run, so this MUST NOT
+    contain a random component. When it did, each run minted a fresh id for a
+    trade already on disk, paper_id_exists() never matched, and the same
+    simulated trade was appended once per run -- silently inflating the n that
+    the graduation gates are scored on.
+    """
+    return f"paper-fnf-{symbol}-{entry_ts.strftime('%Y%m%d%H%M')}"
+
+
 def gen_id() -> str:
     import secrets
     return "0x" + secrets.token_hex(16)
@@ -406,7 +418,7 @@ def mode_paper(symbol_filter: list[str] | None = None) -> None:
                     cur_mfe = 0.0
                     funding_collected = 0.0
                     decision_id = gen_id()
-                    paper_id = f"paper-fnf-{sym}-{times[i].strftime('%Y%m%d%H%M')}-{decision_id[:6]}"
+                    paper_id = paper_trade_id(sym, times[i])
                     pos = PaperPosition(
                         symbol=sym,
                         bucket=policy["bucket"],
@@ -583,7 +595,7 @@ def _process_bars(
         if not in_trade:
             if sig.iloc[i] == 1 and i + 1 < len(df):
                 decision_id = gen_id()
-                paper_id = f"paper-fnf-{sym}-{times[i].strftime('%Y%m%d%H%M')}-{decision_id[:6]}"
+                paper_id = paper_trade_id(sym, times[i])
                 if paper_id_exists(paper_id):
                     pass  # already in JSONL, skip
                 else:

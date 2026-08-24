@@ -6,9 +6,17 @@ whatever trades already exist, so a lane can never reach Gate 2 (n>=30 with
 >=15 forward trades, and >=2 market regimes).
 
 Each tick, in order:
-  1. rebuild the funding + candle panels from freshly captured WS data
+  1. backfill both panels from DuckDB, then rebuild from freshly captured WS
+     data. The jsonl builders only see files still on disk, and disk
+     maintenance deletes old ones -- without the DuckDB backfill the funding
+     panel silently collapses to the last day or two and the strategy stops
+     finding signals while every step still reports "ok".
   2. run paper_funding_neg_fade.py --mode paper (simulation only, no orders)
   3. re-label regimes on closed trades
+
+The tick reports the change in closed-trade count. A daemon that runs clean
+but never trades is the failure mode this loop exists to prevent, so a flat
+count is called out explicitly rather than left to look like success.
 
 Paper mode never places an order. Live trading in that script is gated
 separately on an in-file flag plus a passed testnet bracket proof with a
@@ -32,6 +40,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PY = str(Path(sys.executable))
 
 STEPS = [
+    ("duckdb backfill", [PY, "scripts/build_panels_from_duckdb.py", "--merge"]),
     ("funding panel", [PY, "scripts/build_funding_panel.py"]),
     ("candle panel",  [PY, "scripts/build_candle_panel.py"]),
     ("fade paper",    [PY, "scripts/paper_funding_neg_fade.py", "--mode", "paper"]),
@@ -39,8 +48,35 @@ STEPS = [
 ]
 
 
+POSITIONS = PROJECT_ROOT / "data" / "paper_funding_neg_fade_positions.jsonl"
+STALL_TICKS = 6  # ~6h at the default interval before the flat count is a warning
+
+
 def _ts() -> str:
     return datetime.now(timezone.utc).strftime("%H:%M:%S")
+
+
+def _closed_count() -> int:
+    """Closed trades on disk. -1 if the file is unreadable, so a read error
+    is never mistaken for 'no new trades'."""
+    if not POSITIONS.exists():
+        return 0
+    try:
+        import json
+        n = 0
+        with POSITIONS.open() as fp:
+            for line in fp:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    if json.loads(line).get("status") == "closed":
+                        n += 1
+                except Exception:
+                    continue
+        return n
+    except Exception:
+        return -1
 
 
 def run_once() -> int:
@@ -71,9 +107,27 @@ def main() -> int:
     args = ap.parse_args()
 
     print(f"fade paper daemon starting (interval {args.interval}s, paper mode only)", flush=True)
+    flat_ticks = 0
     while True:
-        print(f"[{_ts()}] tick", flush=True)
-        run_once()
+        before = _closed_count()
+        print(f"[{_ts()}] tick  closed={before}", flush=True)
+        failures = run_once()
+        after = _closed_count()
+
+        delta = after - before if before >= 0 and after >= 0 else 0
+        if delta > 0:
+            flat_ticks = 0
+            print(f"  [{_ts()}] progress: +{delta} closed trades (now {after})", flush=True)
+        else:
+            flat_ticks += 1
+            msg = f"  [{_ts()}] progress: no new closed trades ({flat_ticks} tick(s) flat)"
+            if flat_ticks >= STALL_TICKS:
+                msg += (f"  <-- STALLED {flat_ticks} ticks. Check panel coverage: "
+                        f"python3 scripts/panel_health.py")
+            print(msg, flush=True)
+        if failures:
+            print(f"  [{_ts()}] {failures} step(s) failed this tick", flush=True)
+
         if args.once:
             return 0
         time.sleep(args.interval)
