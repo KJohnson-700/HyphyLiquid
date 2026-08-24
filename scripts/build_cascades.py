@@ -24,6 +24,8 @@ from typing import Iterable
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.data_files import open_data_file, data_file_exists, iter_data_files
+
 from src.strategy.cascade_cluster import cluster_events
 from src.strategy.event_features import (
     _bbo_from_l2book,
@@ -37,10 +39,12 @@ CASCADES_PATH = PROJECT_ROOT / "data" / "cascades.jsonl"
 
 
 def _load_events(path: Path) -> list[dict]:
-    if not path.exists():
+    if not data_file_exists(path):
         return []
     out = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    with open_data_file(path, errors="replace") as _fh:
+        _lines = _fh.read().splitlines()
+    for line in _lines:
         line = line.strip()
         if not line:
             continue
@@ -60,9 +64,9 @@ class SnapshotIndex:
         self.path = path
         self.timestamps: list[int] = []
         self.records: list[dict] = []
-        if not path.exists():
+        if not data_file_exists(path):
             return
-        with path.open("r", encoding="utf-8", errors="replace") as f:
+        with open_data_file(path, errors="replace") as f:
             for line in f:
                 line = line.strip()
                 if not line:

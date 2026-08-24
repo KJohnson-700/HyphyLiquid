@@ -37,6 +37,8 @@ from typing import Any, Iterable
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from src.data_files import open_data_file, data_file_exists, iter_data_files
+
 from src.strategy.event_features import _canonical_symbol, _file_stem  # noqa: E402
 
 
@@ -228,7 +230,7 @@ def _bar_at_or_before(bars: list[dict], ts_ms: int) -> dict | None:
 def _load_bbo(symbol: str) -> list[dict]:
     """Load BBO snapshots for symbol, sorted by ts_ms."""
     canonical = _canonical_symbol(symbol)
-    paths = sorted(BBO_DIR.glob(f"{_file_stem(canonical)}_*.jsonl"))
+    paths = iter_data_files(BBO_DIR, f"{_file_stem(canonical)}_*.jsonl")
     if not paths:
         return []
     out: list[dict] = []
@@ -261,7 +263,7 @@ def _load_bbo(symbol: str) -> list[dict]:
 def _load_l2(symbol: str) -> list[dict]:
     """Load L2 snapshots for symbol, sorted by ts_ms."""
     canonical = _canonical_symbol(symbol)
-    paths = sorted(L2_DIR.glob(f"{_file_stem(canonical)}_*.jsonl"))
+    paths = iter_data_files(L2_DIR, f"{_file_stem(canonical)}_*.jsonl")
     if not paths:
         return []
     out: list[dict] = []
@@ -294,7 +296,7 @@ def _load_l2(symbol: str) -> list[dict]:
 def _load_trades(symbol: str) -> list[dict]:
     """Load raw trades for symbol, sorted by time_ms."""
     canonical = _canonical_symbol(symbol)
-    paths = sorted(TRADES_DIR.glob(f"{_file_stem(canonical)}_*.jsonl"))
+    paths = iter_data_files(TRADES_DIR, f"{_file_stem(canonical)}_*.jsonl")
     if not paths:
         return []
     out: list[dict] = []
@@ -319,7 +321,7 @@ def _load_trades(symbol: str) -> list[dict]:
 def _load_candles(symbol: str) -> list[dict]:
     """Load 1m candles for symbol, dedup to last update per bar, sorted by t."""
     canonical = _canonical_symbol(symbol)
-    paths = sorted(REPO_ROOT.glob(f"data/ws_candle/{_file_stem(canonical)}_*.jsonl"))
+    paths = iter_data_files(REPO_ROOT / "data" / "ws_candle", f"{_file_stem(canonical)}_*.jsonl")
     if not paths:
         return []
     by_open: dict[int, dict] = {}

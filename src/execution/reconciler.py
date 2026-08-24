@@ -112,7 +112,38 @@ def fetch_exchange_snapshot(info: Any, user: str) -> ExchangeSnapshot:
         raw_orders = info.frontend_open_orders(user)
     else:
         raw_orders = info.open_orders(user)
-    return build_exchange_snapshot(user_state, raw_orders, user=user)
+    spot_state = None
+    if hasattr(info, "spot_user_state"):
+        try:
+            spot_state = info.spot_user_state(user)
+        except Exception:
+            spot_state = None  # optional enrichment; never fail the snapshot
+    return build_exchange_snapshot(user_state, raw_orders, user=user, spot_state=spot_state)
+
+
+UNIFIED_COLLATERAL_COINS = ("USDC",)
+
+
+def spot_collateral(spot_state: Any) -> float | None:
+    """Total spot collateral, used when the perps view reports nothing.
+
+    Unified accounts share one balance between spot and perps, so
+    marginSummary.accountValue reads 0.0 until margin is actually in use.
+    Reading only that field reports a funded account as empty, which
+    silently defeats the point of reconciliation. Falling back to spot
+    USDC gives the real figure. Returns None when unavailable.
+    """
+    if not isinstance(spot_state, dict):
+        return None
+    total: float | None = None
+    for balance in spot_state.get("balances") or []:
+        if not isinstance(balance, dict):
+            continue
+        if str(balance.get("coin", "")).upper() in UNIFIED_COLLATERAL_COINS:
+            value = _float_or_none(balance.get("total"))
+            if value is not None:
+                total = value if total is None else total + value
+    return total
 
 
 def build_exchange_snapshot(
@@ -121,10 +152,17 @@ def build_exchange_snapshot(
     *,
     user: str,
     captured_at: datetime | None = None,
+    spot_state: dict | None = None,
 ) -> ExchangeSnapshot:
     """Build a normalized snapshot from raw Hyperliquid SDK responses."""
     margin = user_state.get("marginSummary", {}) if isinstance(user_state, dict) else {}
     account_value = _float_or_none(margin.get("accountValue"))
+    if not account_value:
+        # Unified account: perps margin reads 0.0 while funds sit in the
+        # shared spot balance. Prefer the real number over a phantom zero.
+        spot_value = spot_collateral(spot_state)
+        if spot_value is not None:
+            account_value = spot_value
     raw_positions = user_state.get("assetPositions", []) if isinstance(user_state, dict) else []
     positions = tuple(
         pos for pos in (_parse_exchange_position(row) for row in raw_positions) if pos is not None
