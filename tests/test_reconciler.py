@@ -11,6 +11,7 @@ from src.execution.reconciler import (  # noqa: E402
     build_exchange_snapshot,
     has_protective_stop,
     reconcile,
+    spot_collateral,
 )
 
 
@@ -136,3 +137,48 @@ class TestReconciler(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUnifiedAccountValue(unittest.TestCase):
+    """Unified accounts report 0.0 perps margin while funds sit in shared spot."""
+
+    SPOT = {"balances": [
+        {"coin": "USDC", "total": "998.907211", "hold": "0.0"},
+        {"coin": "TZERO", "total": "0.0", "hold": "0.0"},
+    ]}
+
+    def test_falls_back_to_spot_when_perps_margin_is_zero(self) -> None:
+        snap = build_exchange_snapshot(
+            {"marginSummary": {"accountValue": "0.0"}, "assetPositions": []},
+            [], user="0xabc", spot_state=self.SPOT,
+        )
+        self.assertAlmostEqual(snap.account_value, 998.907211)
+
+    def test_perps_margin_wins_when_non_zero(self) -> None:
+        snap = build_exchange_snapshot(
+            {"marginSummary": {"accountValue": "1234.5"}, "assetPositions": []},
+            [], user="0xabc", spot_state=self.SPOT,
+        )
+        self.assertAlmostEqual(snap.account_value, 1234.5)
+
+    def test_no_spot_state_leaves_account_value_unchanged(self) -> None:
+        snap = build_exchange_snapshot(
+            {"marginSummary": {"accountValue": "0.0"}, "assetPositions": []},
+            [], user="0xabc",
+        )
+        self.assertIn(snap.account_value, (0.0, None))
+
+    def test_genuinely_empty_account_stays_zero(self) -> None:
+        snap = build_exchange_snapshot(
+            {"marginSummary": {"accountValue": "0.0"}, "assetPositions": []},
+            [], user="0xabc",
+            spot_state={"balances": [{"coin": "USDC", "total": "0.0", "hold": "0.0"}]},
+        )
+        self.assertIn(snap.account_value, (0.0, None))
+
+    def test_spot_collateral_ignores_malformed_rows(self) -> None:
+        self.assertIsNone(spot_collateral(None))
+        self.assertIsNone(spot_collateral({"balances": [{"coin": "ETH", "total": "5"}]}))
+        self.assertAlmostEqual(
+            spot_collateral({"balances": ["junk", {"coin": "usdc", "total": "10.5"}]}), 10.5
+        )
