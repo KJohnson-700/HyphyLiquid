@@ -37,6 +37,10 @@ ENV/
 .envrc
 .envrc.local
 
+# Local config (example is committed, real settings are not)
+config/settings.yaml
+!config/settings.example.yaml
+
 # IDE
 .vscode/
 .idea/

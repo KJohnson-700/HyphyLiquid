@@ -39,6 +39,7 @@ RESEARCH_SYMBOLS: frozenset[str] = frozenset({
 })
 
 import logging
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -201,13 +202,34 @@ class OrderManager:
                 return asset
         return {}
 
-    def _round_size(self, symbol: str, size: float) -> float:
+    def _size_decimals(self, symbol: str) -> int:
         asset = self._asset_meta(symbol)
         if "szDecimals" in asset:
-            return round(size, int(asset["szDecimals"]))
+            return int(asset["szDecimals"])
         decimals = {"BTC": 5, "ETH": 4}
-        d = decimals.get(symbol, 3)
-        return round(size, d)
+        return decimals.get(symbol, 3)
+
+    def _round_size(self, symbol: str, size: float) -> float:
+        return round(size, self._size_decimals(symbol))
+
+    def _round_size_down(self, symbol: str, size: float) -> float:
+        """Floor to the symbol's size precision. Never rounds up."""
+        scale = 10 ** self._size_decimals(symbol)
+        return math.floor(size * scale) / scale
+
+    def _round_size_capped(self, symbol: str, size: float, entry: float) -> float:
+        """Round size to the symbol's precision without breaching the leverage cap.
+
+        Sizing already clamps notional to bankroll * max_leverage, but round()
+        can go up and push it back over: a $10,000 clamp at a $60,000 entry
+        rounds to 0.16667 BTC = $10,000.20, which trips the leverage check the
+        clamp was meant to satisfy. Floor to the size tick in that case.
+        """
+        size_r = self._round_size(symbol, size)
+        max_notional = self.bankroll * self.max_leverage
+        if entry > 0 and size_r * entry > max_notional:
+            return self._round_size_down(symbol, max_notional / entry)
+        return size_r
 
     def _cancel_entry_if_possible(self, symbol: str, entry_oid: Optional[int]) -> tuple[bool, Optional[dict], Optional[str]]:
         """Try to cancel a resting parent order after child TP/SL failure."""
@@ -318,7 +340,7 @@ class OrderManager:
             max_notional = self.bankroll * self.max_leverage
             notional = min(float(intent.notional_usd), max_notional)
             size_coin = notional / entry_r if entry_r > 0 else 0.0
-        size_r = self._round_size(symbol, size_coin)
+        size_r = self._round_size_capped(symbol, size_coin, entry_r)
         if size_r <= 0:
             return OrderResult(
                 signal_ts=intent.signal_ts,
@@ -582,7 +604,7 @@ class OrderManager:
         sl_r = self._round_to_tick(symbol, sl_px)
 
         size_coin, notional = self._size_position(entry_r, sl_distance)
-        size_r = self._round_size(symbol, size_coin)
+        size_r = self._round_size_capped(symbol, size_coin, entry_r)
         if size_r <= 0:
             return OrderResult(
                 signal_ts=signal.timestamp, symbol=symbol, side=side_str,

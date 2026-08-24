@@ -26,16 +26,57 @@ from src.strategy.event_features import write_event_features
 
 TRADE_DIR = PROJECT_ROOT / "data" / "trades"
 LOG_PATH = PROJECT_ROOT / "data" / "liquidations.jsonl"
+STATE_PATH = PROJECT_ROOT / "data" / ".liquidation_monitor_state.json"
+
+
+def _state_path() -> Path:
+    """Resolve the offset-state path at call time.
+
+    Reads PROJECT_ROOT on each call instead of the import-time STATE_PATH
+    constant, so tests that redirect PROJECT_ROOT into a temp dir don't
+    write offsets into the real data/ directory.
+    """
+    return PROJECT_ROOT / "data" / ".liquidation_monitor_state.json"
 POLL_INTERVAL_S = 5  # check for new trades every 5s
+# Prune the state file (drop dead keys) every Nth scan. At POLL_INTERVAL_S=5s
+# that's 60s, which is frequent enough to keep the file small without
+# incurring I/O on every iteration. Tune up if prune work becomes visible.
+PRUNE_EVERY_N_SCANS = 12
 
 
 def _symbol_from_trade_path(path: Path) -> str:
-    """Return canonical symbol from a trade jsonl filename."""
+    """Return canonical symbol from a trade jsonl filename.
+
+    Trade files use a sanitized stem (xyz_gold, btc, eth, etc.) — not the
+    on-wire HL symbol. The sanitize rule is: lowercase, replace ':' with '_'.
+    We invert that for HIP-3 names here. Updated 2026-08-22 to support all
+    11 HIP-3 research symbols; falls back to a leading-underscore split for
+    anything else.
+    """
     stem = path.stem
-    if stem.startswith("xyz_gold_"):
+    # HIP-3 family (xyz: deployer). Match prefix and convert back to canonical.
+    if stem.startswith("xyz_gold"):
         return "xyz:GOLD"
-    if stem.startswith("xyz_silver_"):
+    if stem.startswith("xyz_silver"):
         return "xyz:SILVER"
+    if stem.startswith("xyz_nvda"):
+        return "xyz:NVDA"
+    if stem.startswith("xyz_msft"):
+        return "xyz:MSFT"
+    if stem.startswith("xyz_sp500"):
+        return "xyz:SP500"
+    if stem.startswith("xyz_cl"):
+        return "xyz:CL"
+    if stem.startswith("xyz_mu"):
+        return "xyz:MU"
+    if stem.startswith("xyz_mstr"):
+        return "xyz:MSTR"
+    if stem.startswith("xyz_brentoil"):
+        return "xyz:BRENTOIL"
+    if stem.startswith("xyz_coin"):
+        return "xyz:COIN"
+    if stem.startswith("xyz_googl"):
+        return "xyz:GOOGL"
     return stem.split("_")[0].upper()
 
 
@@ -52,7 +93,7 @@ def _last_line_offset(path: Path) -> int:
 
 
 def _save_offset(path: Path, offset: int) -> None:
-    state_path = PROJECT_ROOT / "data" / ".liquidation_monitor_state.json"
+    state_path = _state_path()
     state = {}
     if state_path.exists():
         try:
@@ -61,6 +102,47 @@ def _save_offset(path: Path, offset: int) -> None:
             state = {}
     state[str(path)] = offset
     state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def _load_state_for_prune() -> dict:
+    """Read the state JSON. Returns empty dict on missing/corrupt."""
+    state_path = _state_path()
+    if not state_path.exists():
+        return {}
+    try:
+        return json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def prune_stale_state_keys() -> int:
+    """Drop state keys whose file no longer exists on disk.
+
+    Called every Nth scan from main(). Returns the number of keys dropped.
+    Idempotent: safe to call repeatedly, no-op when nothing is stale.
+    """
+    state = _load_state_for_prune()
+    if not state:
+        return 0
+    live = {k: v for k, v in state.items() if Path(k).exists()}
+    dropped = len(state) - len(live)
+    if dropped == 0:
+        return 0
+    # Atomic-ish write: write to a temp file, then rename. Avoids a partial
+    # state file if the process is killed mid-write.
+    state_path = _state_path()
+    tmp = state_path.with_suffix(".json.tmp")
+    try:
+        tmp.write_text(json.dumps(live, indent=2), encoding="utf-8")
+        tmp.replace(state_path)
+    except Exception as e:
+        print(f"  [prune] write failed: {e}", flush=True)
+        if tmp.exists():
+            try: tmp.unlink()
+            except Exception: pass
+        return 0
+    print(f"  [prune] dropped {dropped} stale key(s); state now {len(live)} live", flush=True)
+    return dropped
 
 
 def _ev_to_record(ev: LiquidationEvent) -> dict:
@@ -91,6 +173,14 @@ def _scan_once(
     total_new_trades = 0
     total_events = 0
     for path in sorted(trade_dir.glob("*.jsonl")):
+        # Skip if the file no longer exists at the recorded path. This happens
+        # when compress_old_data.py gzips an old file: the .jsonl is removed
+        # and the .jsonl.gz remains. The state file's offset for the .jsonl
+        # becomes meaningless. We treat missing files as "nothing to do" and
+        # let the offset expire on the next run (the file path is keyed in
+        # state, so it doesn't conflict with new files).
+        if not path.exists():
+            continue
         sym = _symbol_from_trade_path(path)
         offset = _last_line_offset(path)
         last_good_offset = offset
@@ -188,10 +278,15 @@ def main() -> int:
     detector = LiquidationDetector(per_symbol=True)
     seen_tids: set = set()
 
+    scan_count = 0
     while True:
+        scan_count += 1
         total_new_trades, total_events = _scan_once(detector, seen_tids)
         if total_new_trades:
             print(f"  [scan] {total_new_trades} new trades, {total_events} events", flush=True)
+        # Periodic prune: drop state keys whose file was gzipped/rotated out.
+        if scan_count % PRUNE_EVERY_N_SCANS == 0:
+            prune_stale_state_keys()
         time.sleep(POLL_INTERVAL_S)
 
 
