@@ -117,7 +117,8 @@ class TestReconciler(unittest.TestCase):
         self.assertIn("size_mismatch", codes)
 
     def test_non_v1_position_blocks(self):
-        report = reconcile(local_position=None, exchange_snapshot=_snapshot(symbol="HYPE"))
+        # HYPE is v1 as of 2026-08-20; SOL still is not.
+        report = reconcile(local_position=None, exchange_snapshot=_snapshot(symbol="SOL"))
 
         self.assertTrue(report.blocking)
         self.assertIn("unexpected_non_v1_position", {f.code for f in report.findings})

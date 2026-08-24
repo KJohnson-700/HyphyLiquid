@@ -108,7 +108,9 @@ class TestPositionSupervisor(unittest.TestCase):
         self.assertTrue(decision.close_intent.reduce_only)
 
     def test_rejects_non_v1_symbols(self):
-        decision = build_timeout_decision(_managed(symbol="HYPE"))
+        # HYPE was promoted into V1_TRADE_SYMBOLS on 2026-08-20; SOL is still
+        # research-only, so it is the current example of a rejected symbol.
+        decision = build_timeout_decision(_managed(symbol="SOL"))
 
         self.assertEqual(decision.action, "reject")
         self.assertIn("v1", decision.reason)
