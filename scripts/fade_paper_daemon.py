@@ -48,6 +48,35 @@ STEPS = [
 ]
 
 
+FUNDING_PANEL = PROJECT_ROOT / "data" / "funding_panel.csv"
+TRADED = ("BTC", "ETH", "HYPE", "SOL")
+
+
+def _qualifying_bars(hours: int = 24) -> int:
+    """Bars in the recent window where funding is negative enough to signal.
+
+    A flat trade count means two very different things. If no bar cleared the
+    threshold there was simply nothing to trade and the lane is idle -- correct
+    behaviour, not a fault. If bars did clear it and still nothing opened, the
+    pipeline is broken. Escalating on the first case trains everyone to ignore
+    the warning, so the two are reported differently.
+
+    Returns -1 when the answer is unknown, which is never treated as idle.
+    """
+    try:
+        import pandas as pd
+        sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+        from paper_funding_neg_fade import NEG_THRESHOLD
+
+        df = pd.read_csv(FUNDING_PANEL)
+        df["ts"] = pd.to_datetime(df["ts"], utc=True)
+        recent = df[(df["ts"] >= df["ts"].max() - pd.Timedelta(hours=hours))
+                    & (df["symbol"].isin(TRADED))]
+        return int((recent["funding_actual"] < NEG_THRESHOLD).sum())
+    except Exception:
+        return -1
+
+
 POSITIONS = PROJECT_ROOT / "data" / "paper_funding_neg_fade_positions.jsonl"
 STALL_TICKS = 6  # ~6h at the default interval before the flat count is a warning
 
@@ -119,12 +148,21 @@ def main() -> int:
             flat_ticks = 0
             print(f"  [{_ts()}] progress: +{delta} closed trades (now {after})", flush=True)
         else:
-            flat_ticks += 1
-            msg = f"  [{_ts()}] progress: no new closed trades ({flat_ticks} tick(s) flat)"
-            if flat_ticks >= STALL_TICKS:
-                msg += (f"  <-- STALLED {flat_ticks} ticks. Check panel coverage: "
-                        f"python3 scripts/panel_health.py")
-            print(msg, flush=True)
+            qual = _qualifying_bars()
+            if qual == 0:
+                # Nothing crossed the entry threshold; there was no trade to make.
+                flat_ticks = 0
+                print(f"  [{_ts()}] progress: idle -- no bar under NEG_THRESHOLD "
+                      f"in the last 24h across {'/'.join(TRADED)}", flush=True)
+            else:
+                flat_ticks += 1
+                seen = f"{qual} qualifying bar(s)" if qual > 0 else "signal count unknown"
+                msg = (f"  [{_ts()}] progress: no new closed trades ({flat_ticks} "
+                       f"tick(s) flat, {seen} in last 24h)")
+                if flat_ticks >= STALL_TICKS:
+                    msg += (f"  <-- STALLED {flat_ticks} ticks with signals present. "
+                            f"Check panel coverage: python3 scripts/panel_health.py")
+                print(msg, flush=True)
         if failures:
             print(f"  [{_ts()}] {failures} step(s) failed this tick", flush=True)
 

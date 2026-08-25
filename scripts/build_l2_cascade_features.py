@@ -39,6 +39,7 @@ import argparse
 import bisect
 import json
 import logging
+import os
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -55,6 +56,19 @@ CASCADES_PATH = REPO_ROOT / "data" / "cascades.jsonl"
 L2_INPUT_DIR = REPO_ROOT / "data" / "l2_depth_features"
 OUTPUT_DIR = REPO_ROOT / "data" / "l2_cascade_features"
 LOG_PATH = REPO_ROOT / "logs" / "l2_cascade_features.log"
+
+
+def _log_path() -> Path:
+    """Resolve the log file at call time, honouring HYPHYLIQUID_LOG_DIR.
+
+    LOG_PATH is bound at import against the real repo, so a test that
+    repoints the data paths but forgets this one writes into the live
+    logs/ directory -- which is how pytest runs ended up interleaved with
+    production output in logs/l2_cascade_features.log. conftest.py points
+    the env var at a tmp dir for the whole suite so no test can do it.
+    """
+    base = os.environ.get("HYPHYLIQUID_LOG_DIR")
+    return (Path(base) / "l2_cascade_features.log") if base else LOG_PATH
 
 # --- Snapshot offsets relative to cascade event_ts_ms (ms) ---
 OFFSET_T_MINUS_30S_MS: int = -30_000
@@ -106,11 +120,12 @@ DEFAULT_SYMBOLS: Tuple[str, ...] = ("BTC", "ETH", "SOL")
 # ----------------------------------------------------------------------------
 
 def _setup_logging(verbose: bool = False) -> logging.Logger:
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log_file = _log_path()
+    log_file.parent.mkdir(parents=True, exist_ok=True)
     log = logging.getLogger("build_l2_cascade_features")
     log.setLevel(logging.DEBUG if verbose else logging.INFO)
     if not log.handlers:
-        fh = logging.FileHandler(LOG_PATH, encoding="utf-8")
+        fh = logging.FileHandler(log_file, encoding="utf-8")
         fh.setFormatter(logging.Formatter(
             "%(asctime)s [%(levelname)s] %(message)s",
             datefmt="%Y-%m-%dT%H:%M:%S%z",
