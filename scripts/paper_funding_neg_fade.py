@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
@@ -35,6 +36,9 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+# src/ too, so the exchange modes can import OrderManager when this is
+# run as a script from scripts/ rather than as a package.
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from strategy_search import signal_funding_neg_fade, load_hl_with_funding  # type: ignore
 
@@ -101,6 +105,24 @@ LIVE_RISK_USD = 0.50           # 1% of $50 = $0.50 per trade
 LIVE_ORDERS_PATH = PROJECT_ROOT / "data" / "live_funding_neg_fade_orders.jsonl"
 LIVE_POSITIONS_PATH = PROJECT_ROOT / "data" / "live_funding_neg_fade_positions.jsonl"
 TESTNET_PROOF_PATH = PROJECT_ROOT / "data" / "testnet_proof_status.json"
+
+# --- Testnet forward-execution -------------------------------------------
+# The paper simulator invents a portfolio no exchange would grant: it walked
+# each symbol independently, ignored max_open_positions, and read a funding
+# rate the venue had not published yet. Routing the same signals to testnet
+# replaces every one of those assumptions with an actual venue response --
+# real fills, real rejects, real spread. No mainnet funds are at risk.
+TESTNET_ORDERS_PATH = PROJECT_ROOT / "data" / "testnet_funding_neg_fade_orders.jsonl"
+TESTNET_POSITIONS_PATH = PROJECT_ROOT / "data" / "testnet_funding_neg_fade_positions.jsonl"
+TESTNET_STATE_PATH = PROJECT_ROOT / "data" / "testnet_funding_neg_fade_state.json"
+TESTNET_OPEN_POSITIONS_PATH = PROJECT_ROOT / "data" / "testnet_open_positions.json"
+TESTNET_SYMBOLS = ["HYPE", "SOL", "BTC", "ETH"]
+TESTNET_BANKROLL_USD = 1000.0   # testnet faucet money; mirrors the $1k framework
+TESTNET_RISK_USD = 10.0         # 1% of bankroll
+
+# Concurrency cap, mirroring RiskConfig.max_open_positions. The simulator held
+# four lanes at once for 11 hours; live would have rejected the fourth.
+MAX_OPEN_POSITIONS = 3
 
 # Safety infrastructure (added 2026-08-22 pre-live audit)
 KILL_SWITCH_PATH = PROJECT_ROOT / "data" / "live_kill_switch.flag"
@@ -823,18 +845,23 @@ def _kill_switch_active() -> bool:
     return KILL_SWITCH_PATH.exists()
 
 
-def _load_live_state() -> dict:
-    """Load persisted live-trading state. Returns safe defaults if missing."""
-    if LIVE_STATE_PATH.exists():
+def _load_live_state(path=None, bankroll: float | None = None) -> dict:
+    """Load persisted trading state. Returns safe defaults if missing.
+
+    path/bankroll default to the mainnet file and bankroll; testnet passes its
+    own so a testnet run can never inherit or clobber mainnet circuit state.
+    """
+    path = path or LIVE_STATE_PATH
+    if path.exists():
         try:
-            return json.loads(LIVE_STATE_PATH.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8"))
         except Exception as e:
-            print(f"  WARN: live state parse failed ({e}); starting fresh")
+            print(f"  WARN: state parse failed ({e}); starting fresh")
     return {
         "consecutive_losses": 0,
         "last_loss_ts": None,
         "last_win_ts": None,
-        "peak_equity_usd": LIVE_BANKROLL_USD,
+        "peak_equity_usd": LIVE_BANKROLL_USD if bankroll is None else bankroll,
         "halted_until": None,
         "stopped": False,
         "total_pnl_usd": 0.0,
@@ -842,9 +869,10 @@ def _load_live_state() -> dict:
     }
 
 
-def _save_live_state(state: dict) -> None:
-    LIVE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    LIVE_STATE_PATH.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+def _save_live_state(state: dict, path=None) -> None:
+    path = path or LIVE_STATE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _log_circuit_event(event: str, **fields) -> None:
@@ -943,19 +971,25 @@ def _write_heartbeat(status: str, extra: str = "") -> None:
     HEARTBEAT_PATH.write_text(f"{ts}\t{status}\t{extra}\n", encoding="utf-8")
 
 
-def _load_live_open_positions() -> list[dict]:
-    """Currently open live positions, persisted between ticks."""
-    if not LIVE_OPEN_POSITIONS_PATH.exists():
+def _load_live_open_positions(path=None) -> list[dict]:
+    """Currently open positions, persisted between ticks.
+
+    path defaults to the mainnet file; the testnet mode passes its own so the
+    two venues can never read or overwrite each other's position state.
+    """
+    path = path or LIVE_OPEN_POSITIONS_PATH
+    if not path.exists():
         return []
     try:
-        return json.loads(LIVE_OPEN_POSITIONS_PATH.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return []
 
 
-def _save_live_open_positions(positions: list[dict]) -> None:
-    LIVE_OPEN_POSITIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    LIVE_OPEN_POSITIONS_PATH.write_text(
+def _save_live_open_positions(positions: list[dict], path=None) -> None:
+    path = path or LIVE_OPEN_POSITIONS_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
         json.dumps(positions, indent=2, sort_keys=True), encoding="utf-8"
     )
 
@@ -1222,6 +1256,25 @@ def _cross_venue_snapshot(sym: str, hl_funding_at_signal: float | None) -> dict:
         return {"available": False, "reason": f"compute_delta failed: {e}"}
 
 
+
+def _testnet_guard_ok() -> tuple[bool, str]:
+    """Testnet execution is only allowed to reach testnet.
+
+    Deliberately does NOT consult LIVE_TRADING_ENABLED -- no mainnet funds are
+    involved, so gating this behind the mainnet flag would push people to flip
+    that flag for testing, which is the opposite of safe. It requires instead
+    that .env is actually pointed at testnet, so a box configured for mainnet
+    cannot run this mode at all.
+    """
+    env = os.getenv("HYPERLIQUID_ENV", "").strip().lower()
+    if env != "testnet":
+        return False, (f"HYPERLIQUID_ENV is {env or 'unset'!r}, refusing: this mode "
+                       f"only runs against testnet")
+    if _kill_switch_active():
+        return False, "kill switch is active"
+    return True, "testnet guard passed"
+
+
 def mode_live_trading() -> None:
     """Walk LIVE_SYMBOLS bars, build bracket intents, submit via OrderManager.
 
@@ -1339,12 +1392,15 @@ def mode_live_trading() -> None:
             continue
         policy = PER_ASSET_POLICY[sym]
         sig = signal_funding_neg_fade(df, funding_col="funding_actual", neg_threshold=NEG_THRESHOLD)
-        # Walk bars; collect bracket intents for the most recent unfired signal
+        # Walk bars; collect bracket intents for the most recent unfired signal.
+        # sig carries df's DatetimeIndex, so sig[i] would be a label lookup and
+        # raise KeyError on an integer -- take the values positionally.
+        sig_v = sig.to_numpy() if hasattr(sig, "to_numpy") else sig
         closes = df["close"].values
         times = df.index
         last_signal_idx = -1
         for i in range(1, len(df)):
-            if sig[i] and not sig[i - 1] and closes[i] > 0:
+            if sig_v[i] and not sig_v[i - 1] and closes[i] > 0:
                 last_signal_idx = i
         if last_signal_idx < 0:
             print(f"  {sym}: no fresh signal in this run")
@@ -1436,6 +1492,211 @@ def mode_live_trading() -> None:
 # Mode: audit
 # -----------------------------------------------------------------------------
 
+def mode_testnet_trading(arm: bool = False) -> None:
+    """Route the fade signals to Hyperliquid testnet as real orders.
+
+    Why this exists: the paper simulator answered "what would this strategy
+    have made" with three assumptions the venue never agreed to -- it walked
+    each symbol independently and so held more positions than
+    max_open_positions allows, it filled every entry at the bar close with no
+    spread or rejection, and it read a funding rate the venue had not yet
+    published. Testnet replaces all three with an actual exchange response.
+
+    Safety: refuses unless HYPERLIQUID_ENV=testnet, and points the SDK at
+    TESTNET_API_URL explicitly rather than inheriting a default. It does not
+    consult LIVE_TRADING_ENABLED -- no mainnet funds are involved, and gating
+    testnet behind the mainnet flag would encourage flipping that flag to test.
+    Writes to its own paths so testnet fills can never be mistaken for, or
+    overwrite, mainnet records.
+    """
+    print("=== TESTNET funding_neg_fade: real orders, test funds ===")
+    print(f"  symbols   = {TESTNET_SYMBOLS}")
+    print(f"  bankroll  = ${TESTNET_BANKROLL_USD:.0f}   risk = ${TESTNET_RISK_USD:.2f}/trade")
+    print(f"  max open  = {MAX_OPEN_POSITIONS}")
+    print(f"  armed     = {arm}")
+    print()
+
+    # .env must be loaded before the guard reads HYPERLIQUID_ENV, or a
+    # correctly-configured testnet box would look unset and be refused.
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(PROJECT_ROOT / ".env")
+    except Exception as e:
+        print(f"  REFUSED: could not load .env: {e}")
+        return
+
+    ok, reason = _testnet_guard_ok()
+    if not ok:
+        print(f"  REFUSED: {reason}")
+        return
+    print(f"  guard: {reason}")
+
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(PROJECT_ROOT / ".env")
+        from eth_account import Account
+        from hyperliquid.exchange import Exchange
+        from hyperliquid.info import Info
+        from hyperliquid.utils import constants
+        pk = os.getenv("HYPERLIQUID_PRIVATE_KEY", "").strip()
+        user = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
+        if not pk.startswith("0x"):
+            pk = "0x" + pk
+        wallet = Account.from_key(pk)
+        env_url = constants.TESTNET_API_URL
+        # Belt and braces: if the SDK constant ever changes shape, fail loudly
+        # rather than quietly transacting on mainnet.
+        if "testnet" not in env_url:
+            print(f"  REFUSED: resolved URL {env_url!r} is not a testnet endpoint")
+            return
+        info = Info(env_url, skip_ws=True)
+        exchange = Exchange(wallet, env_url)
+    except Exception as e:
+        print(f"  REFUSED: could not build testnet SDK clients: {e}")
+        return
+    print(f"  endpoint: {env_url}")
+
+    state = _load_live_state(TESTNET_STATE_PATH, bankroll=TESTNET_BANKROLL_USD)
+
+    # Record anything that closed since the last tick before opening more, so
+    # a freed slot is available to this tick's signals.
+    try:
+        closed = _detect_and_record_live_closes(info, user, state)
+    except Exception as e:
+        print(f"  close-detect failed: {e}")
+        closed = 0
+    if closed:
+        print(f"  close-detect: recorded {closed} closed testnet position(s)")
+
+    open_positions = _load_live_open_positions(TESTNET_OPEN_POSITIONS_PATH)
+    print(f"  open now: {len(open_positions)}/{MAX_OPEN_POSITIONS}"
+          f" {[o.get('symbol') for o in open_positions]}")
+
+    om = OrderManagerFactory(exchange, info)
+    TESTNET_ORDERS_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    for sym in TESTNET_SYMBOLS:
+        held = {o.get("symbol") for o in open_positions}
+        if sym in held:
+            print(f"  {sym}: already open, skipping")
+            continue
+        if len(open_positions) >= MAX_OPEN_POSITIONS:
+            # The simulator's central bug was ignoring this. Report it rather
+            # than skipping silently, so the cost of the cap stays visible.
+            print(f"  {sym}: BLOCKED by max_open_positions={MAX_OPEN_POSITIONS}")
+            _append_jsonl(TESTNET_ORDERS_PATH, {
+                "ts_utc": pd.Timestamp.now(tz="UTC").isoformat(),
+                "symbol": sym, "blocked_by": "max_open_positions",
+            })
+            continue
+        if sym not in PER_ASSET_POLICY:
+            print(f"  {sym}: no PER_ASSET_POLICY entry, skipping")
+            continue
+        try:
+            loaded = load_hl_with_funding(sym)
+            df = loaded[0] if isinstance(loaded, tuple) else loaded
+        except Exception as e:
+            print(f"  {sym}: load failed: {e}")
+            continue
+
+        policy = PER_ASSET_POLICY[sym]
+        sig = signal_funding_neg_fade(df, funding_col="funding_actual",
+                                      neg_threshold=NEG_THRESHOLD)
+        sig_v = sig.to_numpy() if hasattr(sig, "to_numpy") else sig
+        closes_arr = df["close"].values
+        times = df.index
+        idx = -1
+        for i in range(1, len(df)):
+            if sig_v[i] and not sig_v[i - 1] and closes_arr[i] > 0:
+                idx = i
+        if idx < 0:
+            print(f"  {sym}: no fresh signal")
+            continue
+        # Only act on a signal from the most recent closed bar. An older one
+        # has already been priced away, and firing it now would be acting on
+        # stale information -- the same class of error as the funding shift.
+        age_h = (pd.Timestamp(times[-1]) - pd.Timestamp(times[idx])) / pd.Timedelta(hours=1)
+        if age_h > 1:
+            print(f"  {sym}: signal is {age_h:.0f}h stale, not acting")
+            continue
+
+        entry_px = float(closes_arr[idx])
+        sl_px = entry_px * (1 - policy["stop_pct"])
+        tp_px = entry_px * (1 + policy["tp_pct"])
+        notional = TESTNET_RISK_USD / max(policy["stop_pct"], 1e-6)
+        print(f"  {sym}: signal @ {times[idx]} entry={entry_px} sl={sl_px:.4f} "
+              f"tp={tp_px:.4f} notional=${notional:.0f}")
+        if not arm:
+            print(f"  {sym}: DRY RUN (pass --arm-testnet to submit)")
+            continue
+
+        result = _submit_testnet_bracket(om, sym, times[idx], entry_px, sl_px,
+                                         tp_px, notional)
+        _append_jsonl(TESTNET_ORDERS_PATH, {
+            "ts_utc": pd.Timestamp.now(tz="UTC").isoformat(),
+            "symbol": sym,
+            "intent": {"signal_ts": str(times[idx]), "side": "long",
+                       "entry_px": entry_px, "sl_px": sl_px, "tp_px": tp_px,
+                       "notional_usd": notional},
+            "result": result,
+        })
+        if result.get("filled"):
+            print(f"  {sym}: FILLED oid={result.get('entry_oid')} size={result.get('size_coin')}")
+            open_positions.append({
+                "paper_id": f"testnet-fnf-{sym}-{pd.Timestamp(times[idx]).strftime('%Y%m%d%H%M')}",
+                "symbol": sym, "side": "long",
+                "entry_ts": pd.Timestamp.now(tz="UTC").isoformat(),
+                "entry_px": entry_px, "size_coin": result.get("size_coin"),
+                "notional_usd": notional,
+                "stop_pct": policy["stop_pct"], "tp_pct": policy["tp_pct"],
+                "max_hold_h": policy["max_hold_h"], "risk_usd": TESTNET_RISK_USD,
+                "entry_oid": result.get("entry_oid"),
+            })
+            _save_live_open_positions(open_positions, TESTNET_OPEN_POSITIONS_PATH)
+        else:
+            print(f"  {sym}: NOT FILLED status={result.get('status')} "
+                  f"error={result.get('error')}")
+
+    _save_live_state(state, TESTNET_STATE_PATH)
+    print(f"\n  orders log: {TESTNET_ORDERS_PATH}")
+
+
+def _append_jsonl(path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, default=str) + "\n")
+
+
+def OrderManagerFactory(exchange, info):
+    """Build an OrderManager bound to testnet with the testnet bankroll."""
+    from src.execution.order_manager import OrderManager
+    return OrderManager(
+        exchange=exchange, info=info,
+        bankroll=TESTNET_BANKROLL_USD,
+        risk_per_trade_pct=TESTNET_RISK_USD / TESTNET_BANKROLL_USD,
+        env="testnet",
+    )
+
+
+def _submit_testnet_bracket(om, sym, signal_ts, entry_px, sl_px, tp_px, notional) -> dict:
+    from src.execution.order_manager import BracketOrderIntent
+    intent = BracketOrderIntent(
+        signal_ts=signal_ts, symbol=sym, side="long",
+        entry_px=entry_px, sl_px=sl_px, tp_px=tp_px,
+        notional_usd=notional,
+        reason=f"funding_neg_fade testnet {sym} signal {signal_ts}",
+    )
+    try:
+        r = om.execute_bracket_intent(intent)
+    except Exception as e:  # noqa: BLE001
+        return {"filled": False, "status": "exception", "error": str(e)}
+    return {
+        "filled": r.filled, "status": r.status, "entry_oid": r.entry_oid,
+        "tp_oid": r.tp_oid, "sl_oid": r.sl_oid, "size_coin": r.size_coin,
+        "risk_verdict": str(r.risk_verdict), "error": r.error,
+    }
+
+
 def mode_audit() -> None:
     positions = load_existing_positions()
     if not positions:
@@ -1473,7 +1734,10 @@ def mode_audit() -> None:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["analyze", "paper", "live", "live_trading", "audit", "kill_switch", "arm_live"], default="paper")
+    ap.add_argument("--mode", choices=["analyze", "paper", "live", "live_trading", "testnet_trading", "audit", "kill_switch", "arm_live"], default="paper")
+    ap.add_argument("--arm-testnet", action="store_true",
+                    help="actually submit orders in testnet_trading mode "
+                         "(without it the mode prints intents and stops)")
     ap.add_argument("--symbol", action="append", help="restrict to symbol (repeatable)")
     args = ap.parse_args()
     if args.mode == "analyze":
@@ -1484,6 +1748,8 @@ def main():
         mode_live(args.symbol)
     elif args.mode == "live_trading":
         mode_live_trading()
+    elif args.mode == "testnet_trading":
+        mode_testnet_trading(arm=args.arm_testnet)
     elif args.mode == "kill_switch":
         KILL_SWITCH_PATH.parent.mkdir(parents=True, exist_ok=True)
         KILL_SWITCH_PATH.touch()
