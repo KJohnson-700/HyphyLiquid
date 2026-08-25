@@ -48,6 +48,10 @@ DAEMONS=(
   # actually up for promotion, in paper mode — without it the fade lane
   # never accumulates trades and no asset can reach Gate 2.
   "fade:fade_paper_daemon.py"
+  # Whale positioning: who is actually on which side, from the public
+  # leaderboard + per-address positions. The only lane reading something other
+  # than the same price/liquidation feed every other bot reads.
+  "whale:collect_whale_positions.py"
 )
 
 # ---- preflight ---------------------------------------------------------------
