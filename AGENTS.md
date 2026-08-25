@@ -23,8 +23,8 @@ We are building an automated **liquidation-aware derivatives-flow counter-trade 
 
 **Symbol split (hard guard):**
 
-- `v1_trade_symbols = BTC, ETH` — active execution, OrderManager trades these
-- `research_symbols = SOL, HYPE, DOGE, BNB, xyz:GOLD, xyz:SILVER` — passive data collection only, no orders
+- `v1_trade_symbols = BTC, ETH, HYPE` — active execution, OrderManager trades these (HYPE promoted 2026-08-24)
+- `research_symbols = SOL, DOGE, BNB, xyz:GOLD, xyz:SILVER, xyz:* HIP-3 names` — passive data collection only, no orders
 
 The split is enforced at the `OrderManager.execute()` level (refuses non-v1 symbols with `rejected_v1_allowlist`) and surfaced in `scripts/status.py`. Backtests always report per-symbol, never blended across the two groups.
 
@@ -35,6 +35,16 @@ The split is enforced at the `OrderManager.execute()` level (refuses non-v1 symb
 ## 1. Scope (what we ARE building)
 
 ### Strategy
+
+> **Updated 2026-08-25.** The lane that is actually built, running hourly, and
+> scored against the graduation ladder is **`funding_neg_fade`**
+> (`scripts/paper_funding_neg_fade.py`): go long when funding is sufficiently
+> negative, on the thesis that negative funding pays longs to hold, so fading
+> it collects carry rather than betting direction. See
+> `docs/THESIS-funding-neg-fade.md`. The cascade tracks below remain the
+> longer-term plan and share the same primitives, but no cascade lane currently
+> has a scorecard.
+
 **Liquidation cascade counter-trade, asset-routed into two execution tracks.** Both tracks share the same trigger (liquidation burst from public trades) and the same primitives (event VWAP, OI delta, funding, BBO spread, L2 imbalance, ATR). They differ in the response classifier and time horizon:
 
 - **BTC/ETH track — `liquidation_fade_or_follow`.** Detect burst, measure immediate book response, wait 1-5 min. Reclaim/absorption → fade. Failed reclaim + continued pressure → follow. Unclear → no trade. Built for the deeper, more directional BTC/ETH books where cascades can be either exhaustion or continuation. **This is the v1 build path** (the original BTC/ETH scope, expanded). Spec: `docs/2026-08-02-RESEARCH-btc-eth-hyperliquid-strategy-sweep.md`.
@@ -230,6 +240,22 @@ Build `src/risk.py` in Week 1, before any strategy code. Every other module call
 - **Fix it.** Don't paper over with a comment.
 - **Add a test** that reproduces the bug before the fix.
 
+### Data integrity (HARD RULE — added 2026-08-25 after a look-ahead bug)
+- **Never derive funding from `asset_ctx` snapshots.** `asset_ctx.funding` is the
+  rate for the *upcoming* settlement. Stamping it with the poll hour puts each
+  hour's funding on the previous bar, so the strategy trades on a rate the venue
+  has not published — look-ahead that inflates every result.
+- ✅ Build panels with `scripts/build_funding_from_venue.py` and
+  `scripts/build_candles_from_venue.py` (HL `fundingHistory` / `candleSnapshot`;
+  authoritative and re-fetchable, so local retention is not on the critical path).
+- ❌ **Do not put `build_funding_panel.py` or `build_panels_from_duckdb.py` in any
+  loop.** They are snapshot-derived. They silently re-corrupted the panel hourly
+  after the first fix.
+- 🔍 Run `scripts/panel_health.py` before trusting any result. It checks coverage
+  *and* venue alignment, and is a blocking step in `fade_paper_daemon.py`.
+- **A step exiting 0 is not progress.** Check the metric the loop exists to move.
+- **Verify against the venue, not against our own capture.**
+
 ### When you change something
 - **Update the changelog** at `changelog.md` (project root) — most recent first.
 - **Update the strategy log** at `vault/strategy-log/<strategy>.md` if it's a strategy change.
@@ -239,7 +265,7 @@ Build `src/risk.py` in Week 1, before any strategy code. Every other module call
 
 ## 8. Vault (second brain) pointers
 
-The Obsidian vault at `C:\Users\AbuBa\Documents\Obsidian Vault\projects\gold-silver-hyperliquid\` is the project's memory. **Code lives in the repo, knowledge lives in the vault.** Update both.
+The Obsidian vault on this Mac is `~/Documents/Hermes Second Brain/projects/hyphy-liquid-bot/` (the `C:\Users\AbuBa\...\gold-silver-hyperliquid\` path below is the retired Windows location). **Only HyphyLiquid files may be edited — PSB-1 and Oracle-3 notes in that vault are off-limits.** The project's memory lives there. **Code lives in the repo, knowledge lives in the vault.** Update both.
 
 Key files:
 - `gold-silver-hyperliquid.md` — vault AI context map (mirror of this file, more detail). Load order: Pillar A strategic → B strategy → C execution.
@@ -266,17 +292,17 @@ The vault is **Obsidian-flavored** with `[[wikilinks]]` and YAML frontmatter. Ma
 |---|---|
 | Project name | HyphyLiquid (name kept despite pivot — "hyphy" = energy, still fits) |
 | Bankroll | $1,000 USDC |
-| v1 trade symbols | BTC, ETH (OrderManager refuses all others) |
-| Research symbols | SOL, HYPE, DOGE, BNB (data collection only) |
+| v1 trade symbols | BTC, ETH, HYPE (OrderManager refuses all others) |
+| Research symbols | SOL, DOGE, BNB, xyz:* HIP-3 (data collection only) |
 | Venue | Hyperliquid mainnet |
 | Reference bot | WickHunter (31★) |
 | Risk/trade | 0.5-1% = $5-$10 |
 | Leverage cap | 10x |
-| First live trade | Target: ~4 weeks from 2026-08-01 |
+| First live trade | Not scheduled — no lane clears Gate 1 (2026-08-25) |
 | Capital ramp | $50 → $200 → $500 → $1,000 |
 | Honest monthly target | 12-15% (not 25-33%) |
 | Honest WR target | 55-65% |
-| Honest PF target | 2.0+ |
+| Honest PF target | 2.0+ (gate is PF >= 1.5; see `src/strategy/graduation.py`) |
 | GitHub description | "BTC/ETH/SOL/HYPE liquidation cascade bot on Hyperliquid" (updated 2026-08-02 from BTC/ETH-only) |
 
 ---
@@ -290,3 +316,8 @@ The vault is **Obsidian-flavored** with `[[wikilinks]]` and YAML frontmatter. Ma
 2026-08-02 (later) — Strategy split into two asset-routed execution tracks. BTC/ETH get `liquidation_fade_or_follow` (v1 build path, response classifier decides fade vs follow on event VWAP reclaim / failed reclaim within 1-5 min). SOL/HYPE get `range_sweep_liquidation_scalp` (Phase 2, gated on BTC/ETH getting 30+ live trades first). Both tracks share the same trigger (liquidation burst) and the same primitives (event VWAP, OI delta, funding, BBO spread, L2 imbalance, ATR). See `docs/2026-08-02-RESEARCH-btc-eth-hyperliquid-strategy-sweep.md` and `docs/2026-08-02-RESEARCH-hybrid-liquidation-strategies.md`.
 
 2026-08-01 — AI/MCP sweep deltas: agent (API) wallet, bracket entry, 128-bit hex client order IDs, decision recorder (`data/decisions_*.jsonl`), WebSocket 4-channel pattern. No LLM in trade loop in v1. See `docs/2026-08-01-RESEARCH-REPOST-ai-mcp-codex.md`.
+
+2026-08-24 — HYPE promoted into `V1_TRADE_SYMBOLS`; SOL price tick 0.001 added (both verified against the live L2 book). Graduation ladder implemented (`src/strategy/graduation.py`, `scripts/graduation_scorecard.py`) with persisted attestations in `data/attestations.json`. Position cap now enforced when scoring: the simulator held 4 lanes at once, `RiskConfig.max_open_positions` is 3, and replaying against it removed 21% of trades and 44% of net profit.
+
+2026-08-25 — **Look-ahead funding bug found and fixed.** Panels were built from `asset_ctx` snapshots, which stamp each hour's funding on the previous bar; the simulator was trading a rate the venue had not published. Correlation against HL `fundingHistory` peaked at +1h on every symbol (mean 0.635 at 0h vs 0.946 at +1h). Panels now come from `fundingHistory` / `candleSnapshot`; alignment is 1.0000. Every result produced before this date was inflated — **no lane currently clears Gate 1** (HYPE PF 1.48, SOL 8.53 at n=11, ETH inf at n=10, BTC 1.47 at n=8). See §7 "Data integrity", `docs/CHANGELOG.md`, and `docs/THESIS-funding-neg-fade.md`. Testnet execution mode added (`--mode testnet_trading`), unarmed. WS collection trimmed to channels with a live consumer (~2.3 GB/day reclaimed).
+
