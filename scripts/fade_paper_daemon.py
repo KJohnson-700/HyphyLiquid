@@ -39,10 +39,20 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PY = str(Path(sys.executable))
 
+# Panels come from the venue, not from local jsonl or DuckDB.
+#
+# asset_ctx.funding is the rate for the *upcoming* settlement, so every builder
+# that derives funding from polled snapshots stamps it an hour early -- the
+# simulator then trades on a rate the venue has not published, which is
+# look-ahead. build_funding_panel.py and build_panels_from_duckdb.py both do
+# this, and while they were in this loop they silently re-corrupted the panel
+# every hour (venue alignment fell from 1.0000 to 0.8538 overnight). They are
+# deliberately NOT in STEPS. fundingHistory/candleSnapshot are authoritative,
+# re-fetchable, and cover more history than the box ever captured locally.
 STEPS = [
-    ("duckdb backfill", [PY, "scripts/build_panels_from_duckdb.py", "--merge"]),
-    ("funding panel", [PY, "scripts/build_funding_panel.py"]),
-    ("candle panel",  [PY, "scripts/build_candle_panel.py"]),
+    ("venue funding", [PY, "scripts/build_funding_from_venue.py"]),
+    ("venue candles", [PY, "scripts/build_candles_from_venue.py"]),
+    ("panel health",  [PY, "scripts/panel_health.py"]),
     ("fade paper",    [PY, "scripts/paper_funding_neg_fade.py", "--mode", "paper"]),
     ("regime labels", [PY, "scripts/label_trade_regimes.py"]),
 ]
@@ -108,8 +118,17 @@ def _closed_count() -> int:
         return -1
 
 
-def run_once() -> int:
+# Steps that must succeed before the strategy is allowed to run. If the panel
+# is wrong, running the sim on it manufactures numbers rather than surfacing the
+# fault -- which is exactly how a broken lane looked healthy for 11 hours.
+BLOCKING_STEPS = {"venue funding", "venue candles", "panel health"}
+
+
+def run_once() -> tuple[int, bool]:
+    """Returns (failure count, aborted). Aborted means a required step failed
+    and the strategy never ran, which must not be reported as a quiet market."""
     failures = 0
+    aborted = False
     for name, cmd in STEPS:
         t0 = time.time()
         try:
@@ -123,10 +142,18 @@ def run_once() -> int:
                 failures += 1
                 err = (r.stderr.strip().splitlines() or ["?"])[-1]
                 print(f"  [{_ts()}] {name}: FAILED rc={r.returncode} {err[:140]}", flush=True)
+                if name in BLOCKING_STEPS:
+                    print(f"  [{_ts()}] ABORTING TICK: {name} is required; refusing "
+                          f"to run the strategy on a panel that failed its check",
+                          flush=True)
+                    return failures, True
         except subprocess.TimeoutExpired:
             failures += 1
             print(f"  [{_ts()}] {name}: TIMEOUT", flush=True)
-    return failures
+            if name in BLOCKING_STEPS:
+                print(f"  [{_ts()}] ABORTING TICK: {name} timed out", flush=True)
+                return failures, True
+    return failures, aborted
 
 
 def main() -> int:
@@ -140,8 +167,19 @@ def main() -> int:
     while True:
         before = _closed_count()
         print(f"[{_ts()}] tick  closed={before}", flush=True)
-        failures = run_once()
+        failures, aborted = run_once()
         after = _closed_count()
+
+        if aborted:
+            # Never let an aborted tick read as a quiet market -- that is the
+            # exact confusion the stall detector exists to prevent.
+            flat_ticks += 1
+            print(f"  [{_ts()}] progress: TICK ABORTED, strategy did not run "
+                  f"({flat_ticks} tick(s) without progress)", flush=True)
+            if args.once:
+                return 1
+            time.sleep(args.interval)
+            continue
 
         delta = after - before if before >= 0 and after >= 0 else 0
         if delta > 0:
