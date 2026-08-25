@@ -39,6 +39,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.strategy.position_cap import apply_position_cap, cap_summary  # noqa: E402
 from src.strategy.graduation import (  # noqa: E402
     Attestations,
     ClosedTrade,
@@ -47,6 +48,25 @@ from src.strategy.graduation import (  # noqa: E402
 )
 
 ATTEST_PATH = PROJECT_ROOT / "data" / "attestations.json"
+SETTINGS = PROJECT_ROOT / "config" / "settings.yaml"
+
+
+def _max_open_positions(default: int = 3) -> int:
+    """Read the live cap from config so the scorecard cannot drift from risk.py."""
+    try:
+        import yaml
+        cfg = yaml.safe_load(SETTINGS.read_text()) or {}
+        for key in ("risk", "trading", "limits"):
+            if isinstance(cfg.get(key), dict) and "max_open_positions" in cfg[key]:
+                return int(cfg[key]["max_open_positions"])
+        if "max_open_positions" in cfg:
+            return int(cfg["max_open_positions"])
+    except Exception:
+        pass
+    return default
+
+
+MAX_OPEN_POSITIONS = _max_open_positions()
 FADE_DETAIL = PROJECT_ROOT / "data" / "strategy_search" / "detail_funding_neg_fade.json"
 PAPER_TRADES = PROJECT_ROOT / "data" / "paper_trades.jsonl"
 FADE_POSITIONS = PROJECT_ROOT / "data" / "paper_funding_neg_fade_positions.jsonl"
@@ -87,7 +107,8 @@ def load_fade_forward_paper() -> list[ClosedTrade]:
     if not FADE_POSITIONS.exists():
         return []
     regimes = load_regimes()
-    out: list[ClosedTrade] = []
+
+    raw = []
     for line in FADE_POSITIONS.open():
         line = line.strip()
         if not line:
@@ -96,7 +117,24 @@ def load_fade_forward_paper() -> list[ClosedTrade]:
             d = json.loads(line)
         except Exception:
             continue
-        if d.get("status") != "closed":
+        if d.get("status") == "closed":
+            raw.append(d)
+
+    # The simulator walks each symbol independently, so it can hold more lanes
+    # at once than RiskManager would ever allow. Score the portfolio live would
+    # actually have held, not the one the simulator imagined.
+    capped = apply_position_cap(raw, MAX_OPEN_POSITIONS)
+    summary = cap_summary(capped)
+    if summary["n_blocked"]:
+        print(f"position cap ({MAX_OPEN_POSITIONS} concurrent): "
+              f"{summary['n_blocked']} of {summary['n_total']} closed trades "
+              f"would have been rejected live "
+              f"(${summary['pnl_blocked']:+.2f} excluded), "
+              f"affecting {', '.join(summary['blocked_symbols'])}")
+
+    out: list[ClosedTrade] = []
+    for d in capped:
+        if not d.get("admitted", True):
             continue
         notional = float(d.get("notional_usd") or 0.0)
         if notional <= 0:
