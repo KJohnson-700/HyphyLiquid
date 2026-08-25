@@ -5,8 +5,8 @@ Subscribes to public, no-auth WebSocket channels for BTC, ETH, SOL, HYPE, DOGE, 
   - trades         (every public trade, real-time)
   - l2Book         (top-of-book depth, 10 levels, real-time)
   - candle         (1m candle updates — needed for scalp time horizons)
-  - activeAssetCtx (mark, oracle, funding, OI per coin, real-time)
-  - bbo            (best bid/offer only, lighter than l2Book)
+  - activeAssetCtx (DISABLED — see ENABLED_CHANNELS)
+  - bbo            (DISABLED — see ENABLED_CHANNELS)
 
 Saves each channel's data to its own directory:
   data/ws_trades/{sym}_{date}.jsonl
@@ -47,6 +47,31 @@ SYMBOLS = (
 )
 RECONNECT_DELAY_S = 5
 DATA_ROOT = PROJECT_ROOT / "data"
+
+# Channels we actually subscribe to. Disabled ones were writing ~2.3 GB/day
+# that nothing running consumed (audited 2026-08-25):
+#
+#   bbo            ~1.1 GB/day - only reader was a research script that is not
+#                  in any daemon. Top-of-book is already available from l2Book.
+#   activeAssetCtx ~0.5 GB/day - only fed build_funding_panel.py, which was
+#                  removed from the fade loop because deriving funding from
+#                  polled snapshots stamps it an hour early. Funding now comes
+#                  from the venue's fundingHistory and is re-fetchable, so
+#                  capturing it locally buys nothing.
+#
+# Still enabled, and each has a live consumer:
+#   trades   -> data/trades  -> liquidation_monitor
+#   l2Book   -> data/ws_l2book -> event_features (via liquidation_monitor)
+#   candle   -> data/ws_candle -> research backtests
+#
+# Re-enable by adding the name back; the handlers are left intact so nothing
+# else has to change.
+ENABLED_CHANNELS = ("trades", "l2Book", "candle")
+
+# The raw ws_trades copy was a second full write of every trade already stored
+# in data/trades (same tid, different envelope) at ~0.75 GB/day. Only
+# liquidation_monitor reads trades, and it reads data/trades.
+WRITE_RAW_WS_TRADES = False
 
 
 def _canonical_symbol(symbol: str) -> str:
@@ -177,7 +202,9 @@ def on_message(ws, message):
                 coin = _canonical_symbol(t.get("coin", ""))
                 if coin in SYMBOLS:
                     t["ts"] = t.get("time") or int(datetime.now(timezone.utc).timestamp() * 1000)
-                    _save("trades", coin, t)
+                    if WRITE_RAW_WS_TRADES:
+                        _save("trades", coin, t)
+                    # data/trades is the copy liquidation_monitor reads.
                     _save_trade_legacy_format(coin, t)
                     _maybe_log("trades", coin)
         elif channel == "candle":
@@ -225,6 +252,8 @@ def on_open(ws):
             ("activeAssetCtx", {}),
             ("bbo", {}),
         ]:
+            if channel not in ENABLED_CHANNELS:
+                continue
             sub = {"type": channel, "coin": sym}
             sub.update(extra)
             ws.send(json.dumps({"method": "subscribe", "subscription": sub}))
