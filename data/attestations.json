@@ -1,4 +1,11 @@
 {
+  "ETH:funding_neg_fade": {
+    "logic_makes_market_sense": {
+      "at": "2026-08-26T11:37:08+00:00",
+      "by": "kslim",
+      "note": "negative funding marks a SHORT-CROWDED book; the edge is price reversion after that crowding, not the funding payment. Measured: funding is 0.36% of net PnL and costs are 60x all funding collected; funding_carry (the trade that actually collects it) LOSES at n=199 PF 0.62; shorting the venue's most extreme positive funding (CASHCAT) lost at every config. Funding is the DETECTOR, not the payment. This is a directional long, not market-neutral carry."
+    }
+  },
   "HYPE:funding_neg_fade": {
     "allowlist_promoted_intentionally": {
       "at": "2026-08-26T06:25:20+00:00",
@@ -26,16 +33,17 @@
       "note": "tick 0.001 verified from live L2 book 2026-08-24: min gap between adjacent levels 0.001, all quotes 3dp; V1_PRICE_TICKS matches"
     },
     "logic_makes_market_sense": {
-      "at": "2026-08-24T21:14:05+00:00",
+      "at": "2026-08-26T11:37:08+00:00",
       "by": "kslim",
-      "note": "negative funding pays the long side to hold; fading it is the carry side of the trade, not a fitted parameter"
+      "note": "negative funding marks a SHORT-CROWDED book; the edge is price reversion after that crowding, not the funding payment. Measured: funding is 0.36% of net PnL and costs are 60x all funding collected; funding_carry (the trade that actually collects it) LOSES at n=199 PF 0.62; shorting the venue's most extreme positive funding (CASHCAT) lost at every config. Funding is the DETECTOR, not the payment. This is a directional long, not market-neutral carry."
     }
   },
-  "SOL:funding_neg_fade": {
+  "SOL:funding_neg_fade": {},
+  "ZEC:swing": {
     "logic_makes_market_sense": {
-      "at": "2026-08-24T21:14:05+00:00",
+      "at": "2026-08-26T11:37:08+00:00",
       "by": "kslim",
-      "note": "negative funding pays the long side to hold; fading it is the carry side of the trade, not a fitted parameter"
+      "note": "momentum continuation after a confirmed move, NOT funding reversion -- a different mechanism from the fade lanes and deliberately attested separately. Entry requires |24h move| > 2%, which is the 'engage after real movement' pattern measured across 349 profitable Hyperliquid accounts (winners open after price has moved; losers trade flat tape). Holds 72h, in the 24-72h band that scores 74% winners / median PF 2.63 versus 53%/1.33 at 2-8h. Balanced 57 long / 52 short, so it is not bull-run beta."
     }
   }
 }
