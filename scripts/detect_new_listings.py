@@ -24,7 +24,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import html as _html
 import json
+import re
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -34,6 +37,24 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 STATE = PROJECT_ROOT / "data" / "listing_state.json"
 EVENTS = PROJECT_ROOT / "data" / "listing_events.jsonl"
 RH_URL = "https://nummus.robinhood.com/currency_pairs/"
+# The only Hyperliquid announcement channel that actually resolves -- the
+# api/x variants all 302. Unauthenticated HTML mirror of the Telegram channel,
+# so no bot token and no rate limit to manage.
+TG_URL = "https://t.me/s/hyperliquid_announcements"
+TG_SEEN = PROJECT_ROOT / "data" / "tg_seen.json"
+# Phrases specific to an asset listing. The first pass used bare words ("list",
+# "launch", "added") and flagged 15 of 20 messages -- the channel is mostly
+# product updates that happen to say "launch". Every message is recorded
+# regardless, so the flag only needs to be precise; the text is there to read.
+LISTING_PATTERNS = (
+    r"\bwill be (?:listed|delisted)\b",
+    r"\b(?:now|newly) listed\b",
+    r"\b(?:de)?listing (?:of|for)\b",
+    r"\bnew (?:perp|perpetual|market|asset) (?:is|are|will|now)\b",
+    r"\bperp(?:etual)?s? (?:for|on) \$?[A-Z]{2,10}\b",
+    r"\bdelist(?:ed|ing)\b",
+    r"\badd(?:ed|ing) \$?[A-Z]{2,10}\b",
+)
 HL_URL = "https://api.hyperliquid.xyz/info"
 
 
@@ -48,6 +69,40 @@ def _post(payload: dict, timeout: int = 30):
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.load(r)
+
+
+
+def _strip(fragment: str) -> str:
+    fragment = re.sub(r"<br\s*/?>", " ", fragment)
+    return _html.unescape(re.sub(r"<[^>]+>", "", fragment)).strip()
+
+
+def telegram_announcements() -> list[dict]:
+    """Recent posts from the Hyperliquid announcements channel.
+
+    A second, independent leg on listing detection. The info/meta highest-index
+    check catches a new perp regardless of wording, but only after the asset
+    exists; an announcement can arrive first, and it also carries context the
+    API never will (delistings, spec changes, HIP rollouts).
+    """
+    req = urllib.request.Request(TG_URL, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        page = r.read().decode("utf-8", "ignore")
+    bodies = re.findall(
+        r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', page, re.S)
+    stamps = re.findall(r'<time datetime="([^"]+)"', page)
+    stamps = stamps[-len(bodies):] if bodies else []
+    out = []
+    for ts, body in zip(stamps, bodies):
+        text = _strip(body)
+        if not text:
+            continue
+        out.append({
+            "id": hashlib.sha1(f"{ts}{text[:200]}".encode()).hexdigest()[:16],
+            "posted": ts, "text": text,
+            "listing_related": any(re.search(pat, text, re.I) for pat in LISTING_PATTERNS),
+        })
+    return out
 
 
 def robinhood_tradable() -> dict:
@@ -100,6 +155,20 @@ def run_once(quiet: bool = False) -> dict:
         except Exception:
             prev = {}
 
+    # Telegram leg -- never let it break the tick; it is a bonus signal.
+    tg_new = []
+    try:
+        seen = set(json.loads(TG_SEEN.read_text())) if TG_SEEN.exists() else set()
+        posts = telegram_announcements()
+        tg_new = [m for m in posts if m["id"] not in seen]
+        if posts:
+            TG_SEEN.parent.mkdir(parents=True, exist_ok=True)
+            TG_SEEN.write_text(json.dumps(sorted({m["id"] for m in posts} | seen)[-400:]))
+        if not seen:
+            tg_new = []          # first run is a baseline, not 20 alerts
+    except Exception as e:  # noqa: BLE001
+        print(f"  telegram leg failed (non-fatal): {e}", flush=True)
+
     new_rh = sorted(set(rh) - set(prev.get("rh", [])))
     new_hl = sorted(set(hl) - set(prev.get("hl", [])))
     first_run = not prev
@@ -112,6 +181,10 @@ def run_once(quiet: bool = False) -> dict:
                        "name": rh[code].get("name"), "hl_perp": perp,
                        "hl_vol24": hl.get(perp, {}).get("vol24") if perp else None,
                        "tradeable_now": bool(perp)})
+    for m in tg_new:
+        events.append({"ts": now.isoformat(), "venue": "hyperliquid_telegram",
+                       "posted": m["posted"], "listing_related": m["listing_related"],
+                       "text": m["text"][:600]})
     for name in new_hl:
         events.append({"ts": now.isoformat(), "venue": "hyperliquid", "code": name,
                        "on_robinhood": any(name in _norm(c) for c in rh),
@@ -142,6 +215,9 @@ def run_once(quiet: bool = False) -> dict:
                 print(f"  *** NEW ROBINHOOD LISTING: {e['code']} -- {where}", flush=True)
                 print(f"      note: the CASHCAT event was +156% in the 7d BEFORE listing "
                       f"and -11% in the 4h after. Confirmation, not entry.", flush=True)
+            elif e["venue"] == "hyperliquid_telegram":
+                tag = "*** LISTING-RELATED" if e["listing_related"] else "    announcement"
+                print(f"  {tag} [{e['posted'][:16]}] {e['text'][:150]}", flush=True)
             else:
                 rh_flag = "also on Robinhood" if e["on_robinhood"] else "not on Robinhood"
                 print(f"  *** NEW HYPERLIQUID PERP: {e['code']} "
