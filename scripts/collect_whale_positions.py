@@ -210,25 +210,41 @@ def collect(top: int, min_value: float, window: str, require_profit: bool,
         # This is forward-looking where the cascade lane was reactive: it shows
         # the fuel before it ignites rather than the fire afterwards. Untested
         # as a signal; collected now because a stop map cannot be backfilled.
+        # Resting orders, both triggers and plain limits. frontendOpenOrders
+        # returns any address's book with attribution, which is the free
+        # equivalent of an L4 view restricted to the wallets we already poll:
+        # who has what resting, where, and how big. Observed on profitable
+        # market-makers: $8M BTC bids sitting ~4% below mid.
+        #
+        # Triggers are the stop map (fuel before ignition, where the cascade
+        # lane only ever saw the fire afterwards); limits are the smart-money
+        # support/resistance map. Both are stored with the mid, because
+        # distance-to-price is the signal and cannot be rebuilt later.
         try:
             for o in _post({"type": "frontendOpenOrders", "user": w["addr"]}):
-                if not o.get("isTrigger"):
-                    continue
+                coin = o.get("coin")
+                is_trig = bool(o.get("isTrigger"))
                 try:
-                    tpx = float(o.get("triggerPx") or 0)
+                    px = float((o.get("triggerPx") if is_trig else o.get("limitPx")) or 0)
+                    sz = float(o.get("sz") or 0)
                 except Exception:
                     continue
-                if tpx <= 0:
+                if px <= 0:
                     continue
                 triggers.append({
                     "ts": now.isoformat(), "addr": w["addr"],
                     "account_value": w["account_value"],
-                    "coin": o.get("coin"), "side": o.get("side"),
-                    "trigger_px": tpx, "condition": o.get("triggerCondition"),
+                    "coin": coin, "side": o.get("side"),
+                    "kind": "trigger" if is_trig else "limit",
+                    "px": px, "sz": sz,
+                    "notional_usd": round(px * sz, 2),
+                    "condition": o.get("triggerCondition"),
                     "is_position_tpsl": o.get("isPositionTpsl"),
                     "reduce_only": o.get("reduceOnly"),
-                    "sz": o.get("sz"), "oid": o.get("oid"),
-                    "mid": mids.get(o.get("coin")),
+                    "oid": o.get("oid"),
+                    "mid": mids.get(coin),
+                    "dist_pct": (round((px - mids[coin]) / mids[coin] * 100, 4)
+                                 if mids.get(coin) else None),
                 })
         except Exception:
             pass

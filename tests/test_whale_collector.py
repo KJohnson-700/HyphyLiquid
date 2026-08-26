@@ -93,8 +93,8 @@ def test_triggers_are_collected_with_the_mid():
     import inspect
     src = inspect.getsource(cw.collect)
     assert "frontendOpenOrders" in src, "resting triggers must be captured"
-    assert '"trigger_px": tpx' in src
-    assert '"mid": mids.get(o.get("coin"))' in src
+    assert '"px": px' in src and '"kind": "trigger" if is_trig else "limit"' in src
+    assert '"mid": mids.get(coin)' in src and '"dist_pct"' in src
 
 
 def test_triggers_go_to_their_own_file():
