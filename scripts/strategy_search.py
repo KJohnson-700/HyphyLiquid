@@ -669,7 +669,25 @@ def load_hl_funding_panel_wide(exclude: list = None) -> tuple[pd.DataFrame, str]
 
 
 def load_hl_recent(symbol: str = "ETH", tf: str = "1h") -> tuple[pd.DataFrame, str]:
-    """Load HL recent candles from our ws_candle data or fetch via API."""
+    """Load HL candles, preferring candle_panel.csv over local WS capture.
+
+    ws_candle only holds what this box recorded since the collector last
+    started -- about three days -- so strategies were being judged on n=30-65
+    when the venue-sourced panel carries ~5,000 hourly bars per symbol. Same
+    stale-source problem the funding panel and the regime labeller both had.
+    """
+    panel = PROJECT_ROOT / "data" / "candle_panel.csv"
+    if tf == "1h" and panel.exists():
+        pdf = pd.read_csv(panel)
+        pdf = pdf[pdf.symbol == symbol]
+        if len(pdf) >= 500:
+            pdf = pdf.copy()
+            pdf["datetime"] = pd.to_datetime(pdf.ts, errors="coerce")
+            pdf = (pdf.dropna(subset=["datetime"]).set_index("datetime")
+                      .sort_index()[["open", "high", "low", "close", "volume"]]
+                      .astype(float))
+            return pdf, f"{symbol}-1h (candle_panel {len(pdf)} bars)"
+
     # First try local ws_candle data
     files = list((PROJECT_ROOT / "data" / "ws_candle").glob(f"{symbol}_*.jsonl")) if (PROJECT_ROOT / "data" / "ws_candle").exists() else []
     if not files:
