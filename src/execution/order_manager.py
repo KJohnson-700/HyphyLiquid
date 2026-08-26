@@ -217,18 +217,39 @@ class OrderManager:
         scale = 10 ** self._size_decimals(symbol)
         return math.floor(size * scale) / scale
 
-    def _round_size_capped(self, symbol: str, size: float, entry: float) -> float:
-        """Round size to the symbol's precision without breaching the leverage cap.
+    def _round_size_capped(self, symbol: str, size: float, entry: float,
+                           stop_distance: float | None = None) -> float:
+        """Round size to the venue's precision without breaching leverage OR risk.
 
-        Sizing already clamps notional to bankroll * max_leverage, but round()
-        can go up and push it back over: a $10,000 clamp at a $60,000 entry
-        rounds to 0.16667 BTC = $10,000.20, which trips the leverage check the
-        clamp was meant to satisfy. Floor to the size tick in that case.
+        Two caps, same failure mode: sizing satisfies the limit, then rounding
+        up puts it back over the limit the sizing was meant to satisfy.
+
+        Leverage: a $10,000 clamp at a $60,000 entry rounds to 0.16667 BTC =
+        $10,000.20, tripping the leverage check.
+
+        Risk per trade: this one is worse, because a strategy that sizes to
+        exactly max_risk trips it on EVERY trade. Observed on the first real
+        testnet signal (HYPE, 2026-08-26 12:00 UTC): intended size 3.205784
+        rounded up to 3.21, stop rounded to the 0.001 tick, and risk landed at
+        $10.0120 against a $10.00 cap -- rejected by 1.2 cents. Passing
+        stop_distance lets the size be floored so the post-rounding risk fits.
         """
         size_r = self._round_size(symbol, size)
+
         max_notional = self.bankroll * self.max_leverage
         if entry > 0 and size_r * entry > max_notional:
-            return self._round_size_down(symbol, max_notional / entry)
+            size_r = self._round_size_down(symbol, max_notional / entry)
+
+        if stop_distance and stop_distance > 0:
+            max_risk = self.bankroll * self._risk.config.max_risk_per_trade_pct
+            # ONLY correct a rounding breach: the unrounded size was already
+            # within the cap and round() pushed it over. An intent that is
+            # genuinely oversized must still be REJECTED, not silently shrunk --
+            # quietly turning a $9,000 request into $600 would hide the caller's
+            # mistake instead of surfacing it.
+            was_compliant = size * stop_distance <= max_risk
+            if was_compliant and size_r * stop_distance > max_risk:
+                size_r = self._round_size_down(symbol, max_risk / stop_distance)
         return size_r
 
     def _cancel_entry_if_possible(self, symbol: str, entry_oid: Optional[int]) -> tuple[bool, Optional[dict], Optional[str]]:
@@ -340,7 +361,7 @@ class OrderManager:
             max_notional = self.bankroll * self.max_leverage
             notional = min(float(intent.notional_usd), max_notional)
             size_coin = notional / entry_r if entry_r > 0 else 0.0
-        size_r = self._round_size_capped(symbol, size_coin, entry_r)
+        size_r = self._round_size_capped(symbol, size_coin, entry_r, stop_distance)
         if size_r <= 0:
             return OrderResult(
                 signal_ts=intent.signal_ts,
@@ -604,7 +625,7 @@ class OrderManager:
         sl_r = self._round_to_tick(symbol, sl_px)
 
         size_coin, notional = self._size_position(entry_r, sl_distance)
-        size_r = self._round_size_capped(symbol, size_coin, entry_r)
+        size_r = self._round_size_capped(symbol, size_coin, entry_r, sl_distance)
         if size_r <= 0:
             return OrderResult(
                 signal_ts=signal.timestamp, symbol=symbol, side=side_str,
