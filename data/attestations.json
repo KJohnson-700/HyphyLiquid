@@ -1,5 +1,30 @@
 {
   "HYPE:funding_neg_fade": {
+    "allowlist_promoted_intentionally": {
+      "at": "2026-08-26T06:25:20+00:00",
+      "by": "kslim",
+      "note": "promoted deliberately 2026-08-26; HYPE present in V1_TRADE_SYMBOLS"
+    },
+    "drawdown_acceptable_1k_framework": {
+      "at": "2026-08-26T06:25:20+00:00",
+      "by": "kslim",
+      "note": "measured max closed-equity drawdown 4.10% over 87 trades on $1k / $10 risk; worst trade -1.02% of bankroll, longest losing run 6. kslim tolerance stated as 18-22%"
+    },
+    "hl_size_decimals_verified": {
+      "at": "2026-08-26T06:25:19+00:00",
+      "by": "kslim",
+      "note": "szDecimals=2, maxLeverage=10 from exchange meta 2026-08-24"
+    },
+    "hl_spread_liquidity_verified": {
+      "at": "2026-08-26T06:25:19+00:00",
+      "by": "kslim",
+      "note": "live book 2026-08-24: spread 0.12bps, top-5 bid depth $190k vs $262 notional at $10 risk / 3.81% stop -- ~700x cover"
+    },
+    "hl_tick_size_verified": {
+      "at": "2026-08-26T06:25:19+00:00",
+      "by": "kslim",
+      "note": "tick 0.001 verified from live L2 book 2026-08-24: min gap between adjacent levels 0.001, all quotes 3dp; V1_PRICE_TICKS matches"
+    },
     "logic_makes_market_sense": {
       "at": "2026-08-24T21:14:05+00:00",
       "by": "kslim",
