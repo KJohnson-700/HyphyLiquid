@@ -32,6 +32,10 @@ G2_N_TOTAL = 30
 G2_N_FORWARD = 15
 G2_PF = 1.5
 G2_MIN_REGIMES = 2
+
+# Labels meaning "could not classify", not a market state. Counting these
+# let 2 unlabelled trades satisfy the 2-regime gate.
+NON_REGIMES = frozenset({"no_data", "unknown", "none", ""})
 # Gate 3 — first live size for any new asset besides HYPE
 CANARY_BANKROLL_USD = 50.0
 CANARY_RISK_PER_TRADE_USD = (0.25, 0.50)
@@ -135,7 +139,14 @@ def score_lane(trades: list[ClosedTrade], att: Attestations | None = None) -> La
     med = median(rets)
     payoff = _payoff_ratio(rets)
     share = _max_single_profit_share(rets)
-    regimes = tuple(sorted({t.regime for t in trades if t.regime}))
+    # "no_data" is the labeller's marker for a trade it could not classify --
+    # missing information, not a market state. Counting it satisfied Gate 2's
+    # "at least 2 regimes" on unlabelled trades, which is the exact silent pass
+    # the gate exists to prevent.
+    regimes = tuple(sorted({
+        t.regime for t in trades
+        if t.regime and t.regime not in NON_REGIMES
+    }))
 
     s = LaneScore(
         symbol=symbols.pop(), lane=lanes.pop(), n_total=len(trades),
