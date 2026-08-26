@@ -120,6 +120,13 @@ def auth_test() -> bool:
     try:
         user_state = info.user_state(addr)
         account_value = float(user_state["marginSummary"]["accountValue"])
+        if not account_value:
+            # Unified account: perps margin reads 0.0 while funds sit in
+            # the shared spot balance (see reconciler.spot_collateral).
+            from src.execution.reconciler import spot_collateral
+            spot_value = spot_collateral(info.spot_user_state(addr))
+            if spot_value:
+                account_value = spot_value
         log("auth", f"Account value: ${account_value:,.2f}")
         if account_value < 10:
             log("auth", f"  Account is small (${account_value:.2f}). Faucet may be needed:")

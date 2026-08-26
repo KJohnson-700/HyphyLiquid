@@ -44,6 +44,23 @@ DAEMONS=(
   "ws:collect_ws_data.py"
   "liq:liquidation_monitor.py"
   "ctx:poll_asset_ctx.py"
+  # The five above only COLLECT data. This one runs the strategy that is
+  # actually up for promotion, in paper mode — without it the fade lane
+  # never accumulates trades and no asset can reach Gate 2.
+  "fade:fade_paper_daemon.py"
+  # Whale positioning: who is actually on which side, from the public
+  # leaderboard + per-address positions. The only lane reading something other
+  # than the same price/liquidation feed every other bot reads.
+  "whale:collect_whale_positions.py"
+  # New Robinhood / Hyperliquid listings. A labelled event history, not an
+  # entry signal -- see the header of the script for why.
+  "listings:detect_new_listings.py"
+  # Robinhood Chain's growth arc + launch velocity. Nothing here can be
+  # backtested -- the chain launched 2026-07-01 -- so this starts the record.
+  "chain:collect_chain_metrics.py"
+  # pump.fun -> Hyperliquid pipeline. The only version of the new-token thesis
+  # with enough completed cases to ever be testable.
+  "pumpfun:collect_pumpfun.py"
 )
 
 # ---- preflight ---------------------------------------------------------------

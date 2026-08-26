@@ -46,10 +46,21 @@ def main() -> int:
     for symbol in SYMBOLS:
         print(f"--- {symbol} ---")
 
-        # Candles
-        df = client.get_candles(
-            symbol, interval=INTERVAL, start_ms=start_ms, end_ms=end_ms
-        )
+        # Candles. HIP-3 names (xyz:*) are absent from the SDK's
+        # name_to_coin map and raise KeyError; skip rather than abort the
+        # whole run, which previously lost every symbol after the first one.
+        try:
+            df = client.get_candles(
+                symbol, interval=INTERVAL, start_ms=start_ms, end_ms=end_ms
+            )
+        except KeyError:
+            print(f"  candles: SKIP (symbol not in SDK coin map)")
+            print()
+            continue
+        except Exception as exc:
+            print(f"  candles: FAILED ({type(exc).__name__}: {exc})")
+            print()
+            continue
         if df.empty:
             print("  candles: NO DATA")
         else:
