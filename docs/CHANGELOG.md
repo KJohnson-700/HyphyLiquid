@@ -6,6 +6,60 @@ the numbers*.
 
 ---
 
+## 2026-08-26
+
+### The fade lane was recalibrated, not cut
+
+Ran it one more time before cutting, at 24-72h holds, on the venue's full
+history (5,002h/symbol) rather than 25 days. Two changes were both required --
+hold 4h -> 24h and stops x3 -- and the result holds in independent halves:
+
+  HYPE  n=88  PF 1.71  4 regimes   H1 1.87 / H2 1.56
+  ETH   n=90  PF 1.69  5 regimes   H1 1.68 / H2 1.59
+  ZEC   swing lane, n=109 PF 1.70  H1 1.95 / H2 1.57
+
+BTC and SOL fail in both halves and were removed from PER_ASSET_POLICY.
+
+### Four more measurement bugs
+
+- **Level vs edge triggering.** Entries fired on every bar funding sat below
+  threshold, re-opening the same episode after each close. ETH: level n=111
+  PF 1.04 vs edge n=88 PF 1.65.
+- **The regime classifier measured the asset, not the market.** An absolute
+  `atr_pct >= 0.50` labelled 100% of HYPE and ZEC bars as high_vol_cascade,
+  traded or not. This produced a false conclusion -- "HYPE's edge is
+  cascade-only" -- that nearly cut the lane. Per-asset percentile now; HYPE has
+  4 regimes.
+- **`no_data` counted as a regime**, satisfying Gate 2 on unlabelled trades.
+- **Stale sources, twice more:** the regime labeller and `load_hl_recent` were
+  reading narrow local files instead of the panel. Every price strategy had
+  been judged on ~3 days.
+
+### What is dead, with real sample sizes
+
+cascade 0.47 (n=826), funding_carry 0.62 (n=199), funding_max_fade 0.70 (n=80),
+grid 0.74-1.02 (n=90-170), ma_cross 0.77-1.03, bb_squeeze 0.50-1.11, all RWA.
+
+`funding_carry` losing at n=199 while `funding_neg_fade` wins showed the
+mechanism is not carry: funding is 0.36% of net P&L and costs are 60x all
+funding collected. The edge is reversion after short-crowding.
+
+### Free venue data now collected
+
+Leaderboard (43,674 accounts), any address's positions, fill history, and
+resting orders/stops -- all no-auth. 349 profitable traders were fingerprinted;
+the 2-8h holding band is the worst on the venue (53% winners) against 24-72h
+(74%), z=2.38 p=0.017.
+
+### Testnet execution armed
+
+HYPE now clears every data-driven gate. Only `decision_path_has_tests` remains
+and it is deliberately unattested -- unit tests do not cover the live path.
+
+See `docs/LESSONS-AND-PLAYBOOK.md`.
+
+---
+
 ## 2026-08-25
 
 ### Panels now come from the venue, not from local snapshots

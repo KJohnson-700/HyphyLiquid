@@ -17,6 +17,14 @@ date: 2026-08-01
 
 ---
 
+## Read first
+
+`docs/LESSONS-AND-PLAYBOOK.md` -- the measurement traps that produced false
+results here, what is actually true about this market, and how to use the
+tooling. Every number in this repo predating 2026-08-26 was affected by at
+least one of those traps. Do not trust a backtest that has not passed the
+checklist at the end of it.
+
 ## TL;DR
 
 We are building an automated **liquidation-aware derivatives-flow counter-trade bot** on **Hyperliquid mainnet** with a **$1,000 USDC bankroll**. Single project, single venue. The strategy class is liquidation cascade counter-trade; execution is asset-routed into two tracks. Conservative risk rules. SOL and HYPE were added 2026-08-02 (HYPE is HL-native, SOL has 20x lev and the deepest liquidity after BTC/ETH). DOGE and BNB were added 2026-08-02 as **research-only** data sources.
