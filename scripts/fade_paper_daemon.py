@@ -64,6 +64,12 @@ STEPS = [
     # market produces nothing rather than stale entries.
     ("testnet exec",  [PY, "scripts/paper_funding_neg_fade.py",
                        "--mode", "testnet_trading", "--arm-testnet"]),
+    # Swing lane on testnet too, armed 2026-08-26. ZEC's PF 1.70 was entirely
+    # simulated until now, and simulation has already been wrong in a way only
+    # a real venue could reveal: the first live fade signal was rejected
+    # because rounding pushed risk 1.2 cents over the cap. Shares the fade
+    # lane's open-positions file, so the 3-position cap is portfolio-wide.
+    ("swing testnet", [PY, "scripts/swing_testnet.py", "--arm-testnet"]),
     ("regime labels", [PY, "scripts/label_trade_regimes.py"]),
 ]
 
