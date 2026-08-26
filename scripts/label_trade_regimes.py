@@ -45,12 +45,44 @@ def _candle_file(symbol: str) -> Path | None:
     return None
 
 
-def load_candles(symbol: str) -> list[dict] | None:
-    p = _candle_file(symbol)
-    if p is None:
+_PANEL = DATA_DIR / "candle_panel.csv"
+_panel_cache: dict | None = None
+
+
+def _from_panel(symbol: str):
+    """Hourly candles for one symbol out of candle_panel.csv.
+
+    Preferred over the per-symbol *_candles_1h_90d_*.csv files, which come from
+    fetch_historical and only ever covered a handful of symbols for 90 days.
+    The panel is venue-sourced and now spans ~7 months for every symbol we
+    trade, so preferring it is the difference between labelling 59 of 182
+    trades and labelling nearly all of them -- and unlabelled trades were
+    counting as a "no_data" regime that satisfied a promotion gate.
+    """
+    global _panel_cache
+    if _panel_cache is None:
+        if not _PANEL.exists():
+            _panel_cache = {}
+        else:
+            df = pd.read_csv(_PANEL)
+            df["ts"] = pd.to_datetime(df["ts"], errors="coerce", utc=True)
+            df["ts"] = df["ts"].dt.tz_localize(None)
+            _panel_cache = {sym: g.sort_values("ts").reset_index(drop=True)
+                            for sym, g in df.groupby("symbol")}
+    g = _panel_cache.get(symbol)
+    if g is None or g.empty:
         return None
-    df = pd.read_csv(p, parse_dates=["timestamp"])
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_localize(None)
+    return g.rename(columns={"ts": "timestamp"})
+
+
+def load_candles(symbol: str) -> list[dict] | None:
+    df = _from_panel(symbol)
+    if df is None:
+        p = _candle_file(symbol)
+        if p is None:
+            return None
+        df = pd.read_csv(p, parse_dates=["timestamp"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_localize(None)
     df = df.sort_values("timestamp").reset_index(drop=True)
     # regime.py / lane_backtest.py read WS candle keys (o/h/l/c/v), not the
     # CSV's open/high/low/close. Without this mapping every lookup returns

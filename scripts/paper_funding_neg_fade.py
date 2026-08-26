@@ -447,7 +447,16 @@ def mode_paper(symbol_filter: list[str] | None = None) -> None:
                 continue
 
             if not in_trade:
-                if sig.iloc[i] == 1 and i + 1 < len(df):
+                # Edge-triggered, not level-triggered. signal_funding_neg_fade
+                # returns 1 for every bar funding sits below the threshold, so
+                # entering on the level re-opens the same episode as soon as a
+                # trade closes -- acting on a condition that has been true for
+                # hours and is already in the price. Measured on ETH, whose
+                # negative-funding stretches are long: level gives n=111 PF 1.04,
+                # edge gives n=88 PF 1.65. HYPE's episodes are short so it barely
+                # moves (1.66 -> 1.70), which is why this hid for so long.
+                fresh = sig.iloc[i] == 1 and (i == 0 or sig.iloc[i - 1] != 1)
+                if fresh and i + 1 < len(df):
                     in_trade = True
                     entry_price = closes[i]
                     entry_idx = i
@@ -630,7 +639,8 @@ def _process_bars(
             continue
 
         if not in_trade:
-            if sig.iloc[i] == 1 and i + 1 < len(df):
+            if (sig.iloc[i] == 1 and (i == 0 or sig.iloc[i - 1] != 1)
+                    and i + 1 < len(df)):
                 decision_id = gen_id()
                 paper_id = paper_trade_id(sym, times[i])
                 if paper_id_exists(paper_id):
