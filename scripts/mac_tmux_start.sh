@@ -58,6 +58,9 @@ DAEMONS=(
   # Robinhood Chain's growth arc + launch velocity. Nothing here can be
   # backtested -- the chain launched 2026-07-01 -- so this starts the record.
   "chain:collect_chain_metrics.py"
+  # pump.fun -> Hyperliquid pipeline. The only version of the new-token thesis
+  # with enough completed cases to ever be testable.
+  "pumpfun:collect_pumpfun.py"
 )
 
 # ---- preflight ---------------------------------------------------------------
