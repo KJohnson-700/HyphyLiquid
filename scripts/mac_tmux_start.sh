@@ -52,6 +52,9 @@ DAEMONS=(
   # leaderboard + per-address positions. The only lane reading something other
   # than the same price/liquidation feed every other bot reads.
   "whale:collect_whale_positions.py"
+  # New Robinhood / Hyperliquid listings. A labelled event history, not an
+  # entry signal -- see the header of the script for why.
+  "listings:detect_new_listings.py"
 )
 
 # ---- preflight ---------------------------------------------------------------
