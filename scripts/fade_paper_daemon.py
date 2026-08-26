@@ -54,6 +54,16 @@ STEPS = [
     ("venue candles", [PY, "scripts/build_candles_from_venue.py"]),
     ("panel health",  [PY, "scripts/panel_health.py"]),
     ("fade paper",    [PY, "scripts/paper_funding_neg_fade.py", "--mode", "paper"]),
+    ("swing paper",   [PY, "scripts/paper_swing.py"]),
+    # Real orders on Hyperliquid TESTNET, armed 2026-08-26 by kslim. This is
+    # the evidence Gate 2's decision_path_has_tests actually asks for: a live
+    # decision path cannot be proven with a simulator, and testnet had been
+    # used exactly once before this. No mainnet funds are involved -- the mode
+    # refuses to start unless HYPERLIQUID_ENV=testnet and re-checks the
+    # resolved URL. It also refuses signals older than one bar, so a quiet
+    # market produces nothing rather than stale entries.
+    ("testnet exec",  [PY, "scripts/paper_funding_neg_fade.py",
+                       "--mode", "testnet_trading", "--arm-testnet"]),
     ("regime labels", [PY, "scripts/label_trade_regimes.py"]),
 ]
 
