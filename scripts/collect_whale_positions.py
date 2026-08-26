@@ -41,6 +41,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SNAP_DIR = PROJECT_ROOT / "data" / "whale_snapshots"
 POS_DIR = PROJECT_ROOT / "data" / "whale_positions"
+TRIG_DIR = PROJECT_ROOT / "data" / "whale_triggers"
 LEADERBOARD_CACHE = PROJECT_ROOT / "data" / "whale_leaderboard.json"
 LEADERBOARD_URL = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
 INFO_URL = "https://api.hyperliquid.xyz/info"
@@ -174,7 +175,7 @@ def collect(top: int, min_value: float, window: str, require_profit: bool,
 
     longs, shorts = defaultdict(float), defaultdict(float)
     n_long, n_short = defaultdict(int), defaultdict(int)
-    per_whale, read, failed = [], 0, 0
+    per_whale, triggers, read, failed = [], [], 0, 0
 
     for w in whales:
         try:
@@ -203,6 +204,34 @@ def collect(top: int, min_value: float, window: str, require_profit: bool,
                 "coin": coin, "side": side, "notional_usd": nv,
                 "size": szi, "entry_px": entry,
             })
+        # Resting stop/take-profit orders. frontendOpenOrders exposes any
+        # address's triggers -- triggerPx, triggerCondition, isTrigger -- so the
+        # map of where stops are sitting can be built without a paid stream.
+        # This is forward-looking where the cascade lane was reactive: it shows
+        # the fuel before it ignites rather than the fire afterwards. Untested
+        # as a signal; collected now because a stop map cannot be backfilled.
+        try:
+            for o in _post({"type": "frontendOpenOrders", "user": w["addr"]}):
+                if not o.get("isTrigger"):
+                    continue
+                try:
+                    tpx = float(o.get("triggerPx") or 0)
+                except Exception:
+                    continue
+                if tpx <= 0:
+                    continue
+                triggers.append({
+                    "ts": now.isoformat(), "addr": w["addr"],
+                    "account_value": w["account_value"],
+                    "coin": o.get("coin"), "side": o.get("side"),
+                    "trigger_px": tpx, "condition": o.get("triggerCondition"),
+                    "is_position_tpsl": o.get("isPositionTpsl"),
+                    "reduce_only": o.get("reduceOnly"),
+                    "sz": o.get("sz"), "oid": o.get("oid"),
+                    "mid": mids.get(o.get("coin")),
+                })
+        except Exception:
+            pass
         time.sleep(REQUEST_SLEEP_S)
 
     filters = {"top": top, "min_value": min_value, "window": window,
@@ -222,7 +251,8 @@ def collect(top: int, min_value: float, window: str, require_profit: bool,
             "filters": filters,
         })
     snapshot.sort(key=lambda r: -(r["long_usd"] + r["short_usd"]))
-    return {"snapshot": snapshot, "per_whale": per_whale, "filters": filters, "now": now}
+    return {"snapshot": snapshot, "per_whale": per_whale, "triggers": triggers,
+            "filters": filters, "now": now}
 
 
 def _append(path: Path, records: list[dict]) -> None:
@@ -245,10 +275,12 @@ def run_once(args) -> int:
     day = res["now"].strftime("%Y-%m-%d")
     _append(SNAP_DIR / f"{day}.jsonl", res["snapshot"])
     _append(POS_DIR / f"{day}.jsonl", res["per_whale"])
+    _append(TRIG_DIR / f"{day}.jsonl", res.get("triggers", []))
     f = res["filters"]
     print(f"[{_ts()}] {f['read']}/{f['eligible']} whales read "
           f"({f['failed']} failed), {len(res['snapshot'])} coins, "
-          f"{len(res['per_whale'])} positions, {time.time()-t0:.0f}s", flush=True)
+          f"{len(res['per_whale'])} positions, "
+          f"{len(res.get('triggers', []))} triggers, {time.time()-t0:.0f}s", flush=True)
     for r in res["snapshot"][:args.show]:
         print(f"    {r['coin']:8} long ${r['long_usd']:>14,.0f}  "
               f"short ${r['short_usd']:>14,.0f}  skew {r['skew']:>+6.2f}  "

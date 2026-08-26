@@ -85,3 +85,17 @@ def test_filters_are_persisted_with_each_snapshot():
     src = inspect.getsource(cw.collect)
     for key in ("rank_by", "top", "min_value", "require_profit"):
         assert key in src
+
+
+def test_triggers_are_collected_with_the_mid():
+    """A stop map cannot be backfilled -- and without the mid at capture time
+    the distance-to-price of each trigger is unrecoverable later."""
+    import inspect
+    src = inspect.getsource(cw.collect)
+    assert "frontendOpenOrders" in src, "resting triggers must be captured"
+    assert '"trigger_px": tpx' in src
+    assert '"mid": mids.get(o.get("coin"))' in src
+
+
+def test_triggers_go_to_their_own_file():
+    assert cw.TRIG_DIR != cw.POS_DIR and cw.TRIG_DIR.name == "whale_triggers"
