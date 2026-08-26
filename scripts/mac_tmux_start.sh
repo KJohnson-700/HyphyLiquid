@@ -55,6 +55,9 @@ DAEMONS=(
   # New Robinhood / Hyperliquid listings. A labelled event history, not an
   # entry signal -- see the header of the script for why.
   "listings:detect_new_listings.py"
+  # Robinhood Chain's growth arc + launch velocity. Nothing here can be
+  # backtested -- the chain launched 2026-07-01 -- so this starts the record.
+  "chain:collect_chain_metrics.py"
 )
 
 # ---- preflight ---------------------------------------------------------------
