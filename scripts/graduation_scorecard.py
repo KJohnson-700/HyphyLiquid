@@ -70,6 +70,7 @@ MAX_OPEN_POSITIONS = _max_open_positions()
 FADE_DETAIL = PROJECT_ROOT / "data" / "strategy_search" / "detail_funding_neg_fade.json"
 PAPER_TRADES = PROJECT_ROOT / "data" / "paper_trades.jsonl"
 FADE_POSITIONS = PROJECT_ROOT / "data" / "paper_funding_neg_fade_positions.jsonl"
+SWING_POSITIONS = PROJECT_ROOT / "data" / "paper_swing_positions.jsonl"
 TRADE_REGIMES = PROJECT_ROOT / "data" / "trade_regimes.json"
 OUT_JSON = PROJECT_ROOT / "data" / "graduation_scorecard.json"
 
@@ -165,6 +166,40 @@ def load_forward_paper() -> list[ClosedTrade]:
             symbol=d.get("symbol", "?"), lane=d.get("lane", "unknown"),
             net_return_pct=float(d["net_pct"]), source="forward_paper",
             entry_ts=str(d.get("signal_ts", "")), regime=str(d.get("regime", "")),
+        ))
+    return out
+
+
+def load_swing_forward_paper() -> list[ClosedTrade]:
+    """Closed round-trips from the swing lane.
+
+    Scored as its own lane, never blended with funding_neg_fade: the ladder is
+    per asset AND per lane, so a strong fade result must not carry a swing
+    config and vice versa. paper_swing.py has already applied the position cap,
+    so no second pass is needed here.
+    """
+    if not SWING_POSITIONS.exists():
+        return []
+    regimes = load_regimes()
+    out: list[ClosedTrade] = []
+    for line in SWING_POSITIONS.open():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if d.get("status") != "closed":
+            continue
+        pct = d.get("net_return_pct")
+        if pct is None:
+            continue
+        out.append(ClosedTrade(
+            symbol=d.get("symbol", "?"), lane="swing",
+            net_return_pct=float(pct), source="forward_paper",
+            entry_ts=str(d.get("entry_ts", "")),
+            regime=regimes.get(d.get("paper_id", ""), ""),
         ))
     return out
 
@@ -271,7 +306,8 @@ def main() -> int:
 
     att = to_attestation_objs(store)
 
-    trades = load_fade_backtest() + load_fade_forward_paper() + load_forward_paper()
+    trades = (load_fade_backtest() + load_fade_forward_paper()
+              + load_swing_forward_paper() + load_forward_paper())
     if not trades:
         print("no closed trades found in any source")
         return 0

@@ -27,9 +27,45 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.strategy.regime import classify_candle_regime  # noqa: E402
+from src.strategy.regime import atr_at, classify_candle_regime  # noqa: E402
+
+_atr_thresh_cache: dict[str, float] = {}
+
+
+def high_atr_threshold(symbol: str, candles: list[dict], pct: float = 80.0) -> float:
+    """Per-asset "high volatility" threshold, as a percentile of its own ATR.
+
+    classify_candle_regime defaults to an absolute atr_pct >= 0.50, which
+    overrides every other label. Measured on the 7-month panel that makes the
+    label meaningless for volatile assets: 100% of HYPE bars and 100% of ZEC
+    bars classify as high_vol_cascade regardless of anything happening, against
+    83% for ETH and 65% for BTC. A gate requiring two regimes was therefore
+    unpassable for HYPE for reasons that have nothing to do with its strategy.
+
+    Using the asset's own 80th percentile restores the intent -- unusually
+    volatile *for this asset* -- and lets the other labels appear at all.
+    """
+    if symbol in _atr_thresh_cache:
+        return _atr_thresh_cache[symbol]
+    vals = []
+    for i in range(30, len(candles), 3):
+        try:
+            a = atr_at(candles, i, period=14)
+            c = float(candles[i].get("c") or 0)
+            if a and c > 0:
+                vals.append(a / c * 100.0)
+        except Exception:
+            continue
+    if len(vals) < 50:
+        thr = 0.50                     # not enough history; keep the old default
+    else:
+        vals.sort()
+        thr = vals[int(len(vals) * pct / 100.0)]
+    _atr_thresh_cache[symbol] = thr
+    return thr
 
 DEFAULT_POSITIONS = PROJECT_ROOT / "data" / "paper_funding_neg_fade_positions.jsonl"
+SWING_POSITIONS = PROJECT_ROOT / "data" / "paper_swing_positions.jsonl"
 DEFAULT_OUT = PROJECT_ROOT / "data" / "trade_regimes.json"
 DATA_DIR = PROJECT_ROOT / "data"
 
@@ -97,16 +133,26 @@ def load_candles(symbol: str) -> list[dict] | None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--positions", type=Path, default=DEFAULT_POSITIONS)
+    # Every lane's positions, not just the fade lane's. A lane whose trades go
+    # unlabelled shows "regimes: none labelled" and can never clear Gate 2's
+    # diversity rule -- it would be blocked by a gap in our own tooling rather
+    # than by anything about the strategy.
+    ap.add_argument("--positions", type=Path, action="append", default=None,
+                    help="repeatable; defaults to every known lane's file")
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = ap.parse_args()
 
-    if not args.positions.exists():
-        print(f"ERROR: {args.positions} not found", file=sys.stderr)
+    paths = args.positions or [DEFAULT_POSITIONS, SWING_POSITIONS]
+    paths = [p for p in paths if p.exists()]
+    if not paths:
+        print("ERROR: no positions files found", file=sys.stderr)
         return 1
 
     rows = []
-    for line in args.positions.open():
+    lines = []
+    for _p in paths:
+        lines.extend(_p.read_text().splitlines())
+    for line in lines:
         line = line.strip()
         if line:
             try:
@@ -136,7 +182,9 @@ def main() -> int:
         if idx is None or idx <= 0:
             unlabelled += 1
             continue
-        reg = classify_candle_regime(candles, idx)
+        reg = classify_candle_regime(
+            candles, idx,
+            high_atr_pct=high_atr_threshold(sym, candles))
         labels[tid] = {"symbol": sym, "entry_ts": r["entry_ts"],
                        "regime": reg.label, "trend": reg.trend,
                        "band_width_bucket": reg.band_width_bucket}
