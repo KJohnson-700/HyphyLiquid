@@ -150,6 +150,12 @@ def main() -> int:
             continue
 
         res = _submit_testnet_bracket(om, sym, sig["ts"], entry, sl, tgt, notional)
+        try:
+            from src.notify import order_event
+            order_event("swing", sym, sig["side"], res,
+                        {"entry_px": entry, "sl_px": sl, "tp_px": tgt})
+        except Exception:
+            pass
         _append_jsonl(ORDERS, {
             "ts_utc": pd.Timestamp.now(tz="UTC").isoformat(), "lane": "swing",
             "symbol": sym, "side": sig["side"],

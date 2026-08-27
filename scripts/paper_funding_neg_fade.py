@@ -1657,6 +1657,12 @@ def mode_testnet_trading(arm: bool = False) -> None:
 
         result = _submit_testnet_bracket(om, sym, times[idx], entry_px, sl_px,
                                          tp_px, notional)
+        try:
+            from src.notify import order_event
+            order_event("fade", sym, "long", result,
+                        {"entry_px": entry_px, "sl_px": sl_px, "tp_px": tp_px})
+        except Exception:
+            pass          # a notification must never break trading
         _append_jsonl(TESTNET_ORDERS_PATH, {
             "ts_utc": pd.Timestamp.now(tz="UTC").isoformat(),
             "symbol": sym,

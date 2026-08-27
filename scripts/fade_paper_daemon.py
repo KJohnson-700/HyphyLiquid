@@ -192,6 +192,14 @@ def main() -> int:
             flat_ticks += 1
             print(f"  [{_ts()}] progress: TICK ABORTED, strategy did not run "
                   f"({flat_ticks} tick(s) without progress)", flush=True)
+            try:
+                from src.notify import send
+                send(f"A required step failed, so the strategy did not run.\n"
+                     f"{flat_ticks} tick(s) without progress.\n"
+                     f"Check: python3 scripts/panel_health.py",
+                     title="HyphyLiquid — TICK ABORTED")
+            except Exception:
+                pass
             if args.once:
                 return 1
             time.sleep(args.interval)
