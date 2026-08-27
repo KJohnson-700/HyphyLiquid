@@ -121,3 +121,23 @@ allium-config.json
 tardis-config.json
 purrdata-config.json
 coinglass-config.json
+
+# Local WIP / backup artifacts (never commit)
+/0
+/.cron_*
+/.run_cron_*
+/.run_candle.*
+/.tmp_*
+/cf_err.txt
+/cf_out.txt
+/fetch_err.txt
+/fetch_out.txt
+/hl_funding_*.txt
+/build_candle.*
+/build_funding.*
+/candle_*.log*
+/funding_*.log*
+/cf_err.log
+/cf_out.log
+/.windows-wip-backup-*
+/research/imports/
