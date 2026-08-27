@@ -422,9 +422,16 @@ class OrderManager:
                 error=f"risk rejected: {verdict.value}",
             )
 
+        # The SDK's bulk_orders reads order["coin"]; Exchange.order() takes a
+        # `name` argument and maps it to "coin" internally. These requests go
+        # straight to bulk_orders, so they must use "coin". They said "name",
+        # which raised KeyError: 'coin' on every submission -- the bracket
+        # submitter had never successfully placed an order. The 2026-08-24
+        # bracket proof passed because run_testnet_proof.py calls
+        # exchange.order() rather than building requests by hand.
         order_requests = [
             {
-                "name": symbol,
+                "coin": symbol,
                 "is_buy": is_buy,
                 "sz": size_r,
                 "limit_px": entry_r,
@@ -435,7 +442,7 @@ class OrderManager:
         if tp_r > 0:
             order_requests.append(
                 {
-                    "name": symbol,
+                    "coin": symbol,
                     "is_buy": not is_buy,
                     "sz": size_r,
                     "limit_px": tp_r,
@@ -445,7 +452,7 @@ class OrderManager:
             )
         order_requests.append(
             {
-                "name": symbol,
+                "coin": symbol,
                 "is_buy": not is_buy,
                 "sz": size_r,
                 "limit_px": sl_r,
@@ -534,8 +541,20 @@ class OrderManager:
             tp_status = status_by_idx.get(tp_index) if tp_index is not None else None
             sl_status = status_by_idx.get(sl_index)
             entry_live = entry_oid is not None
-            tp_ok = tp_index is None or tp_oid is not None
-            sl_ok = sl_oid is not None
+            # A protective child on an unfilled entry comes back as the bare
+            # string "waitingForFill", not a resting oid -- it is armed and will
+            # activate when the entry fills. Verified on testnet 2026-08-27: the
+            # response [{'resting': {...}}, 'waitingForFill', 'waitingForFill']
+            # put a complete bracket on the book (entry + stop + target all
+            # visible in frontendOpenOrders), yet was reported
+            # reconcile_unknown / "incomplete order response". Treat it as the
+            # success it is.
+            def _armed(idx, oid):
+                if oid is not None:
+                    return True
+                return status_by_idx.get(idx) == "waitingForFill"
+            tp_ok = tp_index is None or _armed(tp_index, tp_oid)
+            sl_ok = _armed(sl_index, sl_oid)
             child_failure = error is not None and entry_live
             if child_failure:
                 cancel_attempted, cancel_response, cancel_error = self._cancel_entry_if_possible(symbol, entry_oid)
@@ -673,7 +692,7 @@ class OrderManager:
 
         order_requests = [
             {
-                "name": symbol,
+                "coin": symbol,
                 "is_buy": is_buy,
                 "sz": size_r,
                 "limit_px": entry_r,
@@ -681,7 +700,7 @@ class OrderManager:
                 "reduce_only": False,
             },
             {
-                "name": symbol,
+                "coin": symbol,
                 "is_buy": not is_buy,
                 "sz": size_r,
                 "limit_px": tp_r,
@@ -689,7 +708,7 @@ class OrderManager:
                 "reduce_only": True,
             },
             {
-                "name": symbol,
+                "coin": symbol,
                 "is_buy": not is_buy,
                 "sz": size_r,
                 "limit_px": sl_r,
@@ -756,7 +775,8 @@ class OrderManager:
                 status = "orphan_error"
             elif error:
                 status = "rejected"
-            elif entry_live and tp_oid is not None and sl_oid is not None:
+            elif entry_live and (tp_oid is not None or status_by_idx.get(tp_index) == "waitingForFill") \
+                    and (sl_oid is not None or status_by_idx.get(sl_index) == "waitingForFill"):
                 status = "submitted"
             else:
                 error = f"incomplete order response: {statuses}"

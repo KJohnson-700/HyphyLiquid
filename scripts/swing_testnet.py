@@ -138,13 +138,30 @@ def main() -> int:
 
         long_ = sig["side"] == "long"
         stop, tp = cfg["stop"], cfg["stop"] * 1.5
-        entry = sig["px"]
+
+        # Price the order off the VENUE we are trading on, not the panel.
+        # Panels are mainnet-sourced; testnet prices are decoupled and can
+        # differ wildly (2026-08-27: ZEC $138.65 on testnet vs $818.65 on
+        # mainnet, HYPE $48 vs $85). Submitting mainnet absolute levels to
+        # testnet produced orders nowhere near the book, which then rounded to
+        # zero size. The SIGNAL still comes from mainnet data -- that is the
+        # real market -- but the levels are relative (stop %, target %) so they
+        # translate onto whichever venue actually executes.
+        try:
+            venue_mid = float(info.all_mids().get(sym) or 0)
+        except Exception:
+            venue_mid = 0.0
+        if venue_mid <= 0:
+            print(f"  {sym}: no venue mid, skipping")
+            continue
+        entry = venue_mid
         sl = entry * (1 - stop) if long_ else entry * (1 + stop)
         tgt = entry * (1 + tp) if long_ else entry * (1 - tp)
         notional = TESTNET_RISK_USD / stop
         print(f"  {sym}: {sig['side'].upper()} signal @ {sig['ts']} "
-              f"(24h {sig['move24']:+.1f}%)  entry={entry:.4f} sl={sl:.4f} "
-              f"tp={tgt:.4f} notional=${notional:.0f}")
+              f"(24h {sig['move24']:+.1f}%)  venue mid {entry:.4f} "
+              f"(panel {sig['px']:.4f})  sl={sl:.4f} tp={tgt:.4f} "
+              f"notional=${notional:.0f}")
         if not args.arm_testnet:
             print(f"  {sym}: DRY RUN (pass --arm-testnet to submit)")
             continue

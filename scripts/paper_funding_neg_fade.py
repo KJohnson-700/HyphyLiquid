@@ -133,7 +133,15 @@ TESTNET_STATE_PATH = PROJECT_ROOT / "data" / "testnet_funding_neg_fade_state.jso
 TESTNET_OPEN_POSITIONS_PATH = PROJECT_ROOT / "data" / "testnet_open_positions.json"
 TESTNET_SYMBOLS = ["HYPE", "SOL", "BTC", "ETH"]
 TESTNET_BANKROLL_USD = 1000.0   # testnet faucet money; mirrors the $1k framework
-TESTNET_RISK_USD = 10.0         # 1% of bankroll
+# Validation sizing, NOT risk sizing. Testnet money exists to prove the
+# execution path works; capping it at 1% of a fake bankroll blocked orders
+# outright. ZEC signalled six consecutive hours and every attempt rounded to
+# zero size because 1 whole coin (szDecimals=0 on testnet) risks $11.09 at an
+# 8% stop against a $10 budget -- short by $1.09.
+#
+# Raised so minimum-size assets clear. Mainnet is unaffected: LIVE_RISK_USD
+# stays at $0.50 (1% of the $50 canary) and is a separate constant.
+TESTNET_RISK_USD = 25.0         # 2.5% of the testnet bankroll
 
 # Concurrency cap, mirroring RiskConfig.max_open_positions. The simulator held
 # four lanes at once for 11 hours; live would have rejected the fourth.
@@ -1645,12 +1653,25 @@ def mode_testnet_trading(arm: bool = False) -> None:
             print(f"  {sym}: signal is {age_h:.0f}h stale, not acting")
             continue
 
-        entry_px = float(closes_arr[idx])
+        # Price off the venue, not the panel -- see swing_testnet.py for why.
+        # Testnet prices are decoupled from mainnet (HYPE $48 vs $85 on
+        # 2026-08-27), so mainnet absolute levels are meaningless here. The
+        # signal is mainnet-derived; the levels are relative and translate.
+        try:
+            venue_mid = float((info.all_mids() or {}).get(sym) or 0)
+        except Exception:
+            venue_mid = 0.0
+        if venue_mid <= 0:
+            print(f"  {sym}: no venue mid, skipping")
+            continue
+        panel_px = float(closes_arr[idx])
+        entry_px = venue_mid
         sl_px = entry_px * (1 - policy["stop_pct"])
         tp_px = entry_px * (1 + policy["tp_pct"])
         notional = TESTNET_RISK_USD / max(policy["stop_pct"], 1e-6)
-        print(f"  {sym}: signal @ {times[idx]} entry={entry_px} sl={sl_px:.4f} "
-              f"tp={tp_px:.4f} notional=${notional:.0f}")
+        print(f"  {sym}: signal @ {times[idx]}  venue mid {entry_px:.4f} "
+              f"(panel {panel_px:.4f})  sl={sl_px:.4f} tp={tp_px:.4f} "
+              f"notional=${notional:.0f}")
         if not arm:
             print(f"  {sym}: DRY RUN (pass --arm-testnet to submit)")
             continue
