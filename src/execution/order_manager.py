@@ -379,8 +379,19 @@ class OrderManager:
                 sl_px=sl_r,
                 risk_verdict=RiskVerdict.REJECTED_RISK_PCT,
                 filled=False,
-                status="rejected",
-                error="position size rounds to zero",
+                status="rejected_below_min_size",
+                error=(
+                    f"{symbol} size {size_coin:.6f} rounds to zero at "
+                    f"szDecimals={self._size_decimals(symbol)} on this venue. "
+                    f"Minimum tradeable is {10 ** -self._size_decimals(symbol):g} "
+                    f"coin = ${(10 ** -self._size_decimals(symbol)) * entry_r:,.2f} "
+                    f"notional, which at a {stop_distance / entry_r:.2%} stop risks "
+                    f"${(10 ** -self._size_decimals(symbol)) * stop_distance:,.2f} "
+                    f"against a ${self.bankroll * self._risk.config.max_risk_per_trade_pct:,.2f} "
+                    f"budget. The asset is untradeable at this bankroll here -- note "
+                    f"szDecimals can differ between testnet and mainnet (ZEC is 0 on "
+                    f"testnet, 2 on mainnet)."
+                ),
             )
 
         notional = size_r * entry_r
