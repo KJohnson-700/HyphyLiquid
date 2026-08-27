@@ -242,8 +242,12 @@ def test_orphan_entry_attempts_cancel_when_child_order_fails() -> None:
     assert fake.calls[-1] == ("cancel", [{"coin": "BTC", "oid": 100}])
 
 
-def test_v1_allowlist_includes_promoted_hype() -> None:
-    assert V1_TRADE_SYMBOLS == frozenset({"BTC", "ETH", "HYPE"})
+def test_v1_allowlist_is_exactly_the_promoted_set() -> None:
+    """Pinned deliberately. The allowlist is the last gate before real orders,
+    so it must never grow by accident -- changing it should require changing
+    this test too. ZEC added 2026-08-27 for the swing lane (n=109, PF 1.70,
+    validated in both halves)."""
+    assert V1_TRADE_SYMBOLS == frozenset({"BTC", "ETH", "HYPE", "ZEC"})
 
 
 def test_refuses_to_trade_sol_research_symbol() -> None:

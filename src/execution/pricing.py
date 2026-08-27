@@ -11,6 +11,11 @@ V1_PRICE_TICKS: dict[str, float] = {
     # rounds correctly in paper; SOL is still absent from V1_TRADE_SYMBOLS and
     # this does not authorise trading it.
     "SOL": 0.001,
+    # ZEC verified 2026-08-27 from the live L2 book: min gap between adjacent
+    # levels 0.01, quotes at 2dp, szDecimals 2. Explicit rather than relying on
+    # the 0.01 default -- they coincide here, but the default is a guess and
+    # this is a measurement.
+    "ZEC": 0.01,
 }
 
 

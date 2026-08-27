@@ -30,7 +30,12 @@ from __future__ import annotations
 # HYPE promoted 2026-08-20 after PF 2.52 on 17 paper trades.
 # 2026-08-22: dropped DOGE/BNB (0 paper trades over 19 days, dead capital).
 # 2026-08-22: added xyz:NVDA, MSFT, SP500, CL, MU, MSTR, BRENTOIL, COIN, GOOGL.
-V1_TRADE_SYMBOLS: frozenset[str] = frozenset({"BTC", "ETH", "HYPE"})
+# ZEC added 2026-08-27 for the swing lane: n=109, PF 1.70, validated in both
+# independent halves (H1 1.95 / H2 1.57), 4 regimes, 0.13bps spread on $266k
+# top-5 depth. It signalled three times on testnet and was refused each time
+# because it was absent here -- the gate working as designed, but it made
+# "armed" untrue for that lane.
+V1_TRADE_SYMBOLS: frozenset[str] = frozenset({"BTC", "ETH", "HYPE", "ZEC"})
 RESEARCH_SYMBOLS: frozenset[str] = frozenset({
     "SOL",
     "xyz:GOLD", "xyz:SILVER", "xyz:NVDA", "xyz:MSFT",

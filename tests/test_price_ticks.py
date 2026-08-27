@@ -6,7 +6,7 @@ Values verified against the Hyperliquid L2 book on 2026-08-24.
 """
 from src.execution.pricing import V1_PRICE_TICKS, round_to_tick
 
-VERIFIED = {"BTC": 1.0, "ETH": 0.1, "HYPE": 0.001, "SOL": 0.001}
+VERIFIED = {"BTC": 1.0, "ETH": 0.1, "HYPE": 0.001, "SOL": 0.001, "ZEC": 0.01}
 
 
 def test_verified_ticks_present():
