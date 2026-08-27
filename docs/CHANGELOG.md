@@ -4,6 +4,12 @@ Findings and decisions that change how results should be read. Newest first.
 Code detail lives in commit messages; this records *why* and *what it means for
 the numbers*.
 
+Earlier history (2026-08-01 to 08-12) is in
+`docs/CHANGELOG-archive-2026-08-01-to-08-12.md`. It was at the repo root as
+`changelog.md`; moved here so there is one place to look. Note it predates the
+look-ahead fix, so **every number in it is inflated** -- keep it for decisions
+and dates, not for performance figures.
+
 ---
 
 ## 2026-08-26

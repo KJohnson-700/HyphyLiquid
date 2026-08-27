@@ -1,10 +1,11 @@
 ---
 project: hyphyliquid
 asset: crypto
-strategy: btc-eth-sol-hype-cascade
+strategy: funding-neg-fade (v1) + swing (ZEC)
 venue: hyperliquid
-status: building
+status: forward-paper, testnet armed, mainnet shut
 date: 2026-08-01
+updated: 2026-08-27
 ---
 
 # AGENTS.md — HyphyLiquid
@@ -25,14 +26,46 @@ tooling. Every number in this repo predating 2026-08-26 was affected by at
 least one of those traps. Do not trust a backtest that has not passed the
 checklist at the end of it.
 
+Then: `docs/CHANGELOG.md` for project state, `docs/START_DAEMONS.md` to run it,
+`docs/THESIS-funding-neg-fade.md` for the v1 strategy and its falsifiers.
+`HANDOFF.md` is the Windows-box shutdown report (Mavis, 2026-08-26) -- history,
+not current state.
+
 ## TL;DR
 
-We are building an automated **liquidation-aware derivatives-flow counter-trade bot** on **Hyperliquid mainnet** with a **$1,000 USDC bankroll**. Single project, single venue. The strategy class is liquidation cascade counter-trade; execution is asset-routed into two tracks. Conservative risk rules. SOL and HYPE were added 2026-08-02 (HYPE is HL-native, SOL has 20x lev and the deepest liquidity after BTC/ETH). DOGE and BNB were added 2026-08-02 as **research-only** data sources.
+We are building an automated **derivatives-flow bot** on **Hyperliquid** with a
+**$1,000 USDC bankroll**. Single project, single venue. Conservative risk rules.
+
+**The v1 strategy is `funding_neg_fade`, not the liquidation cascade.** The
+cascade lane -- the thing this project was originally named around -- was
+measured at net PF 0.47 on n=826 and is dead. It has no scorecard and is not
+scheduled. See §1.
+
+Three lanes carry a scorecard, all at FORWARD_PAPER, all validated on 7 months
+of venue-sourced data across two independent halves with costs and the position
+cap applied:
+
+| lane | asset | n | PF | regimes |
+|---|---|---|---|---|
+| `funding_neg_fade` | HYPE | 88 | 1.71 | 4 |
+| `funding_neg_fade` | ETH | 91 | 1.72 | 5 |
+| `swing` | ZEC | 109 | 1.70 | 4 |
+
+**The mechanism is not carry.** Funding is 0.36% of net P&L and costs are 60x
+all funding collected; `funding_carry` loses at n=199. Negative funding marks a
+short-crowded book and the edge is price reversion after that crowding --
+funding is the detector, not the payment. This is a directional long.
 
 **Symbol split (hard guard):**
 
-- `v1_trade_symbols = BTC, ETH, HYPE` — active execution, OrderManager trades these (HYPE promoted 2026-08-24)
-- `research_symbols = SOL, DOGE, BNB, xyz:GOLD, xyz:SILVER, xyz:* HIP-3 names` — passive data collection only, no orders
+- `v1_trade_symbols = BTC, ETH, HYPE, ZEC` — OrderManager will trade these
+  (HYPE 2026-08-24, ZEC 2026-08-27)
+- **Calibrated and actually trading: ETH, HYPE (fade) and ZEC (swing) only.**
+  BTC and SOL were removed from `PER_ASSET_POLICY` on 2026-08-26 -- both fail in
+  BOTH halves (1.05/0.87 and 0.98/0.88) -- and the loop skips uncalibrated
+  symbols, so being on the allowlist does not make them trade.
+- everything else -- DOGE, BNB, all `xyz:*` HIP-3 names, all memecoins --
+  research only. All were tested and are dead after costs.
 
 The split is enforced at the `OrderManager.execute()` level (refuses non-v1 symbols with `rejected_v1_allowlist`) and surfaced in `scripts/status.py`. Backtests always report per-symbol, never blended across the two groups.
 
@@ -44,7 +77,25 @@ The split is enforced at the `OrderManager.execute()` level (refuses non-v1 symb
 
 ### Strategy
 
-> **Updated 2026-08-25.** The lane that is actually built, running hourly, and
+**v1 is `funding_neg_fade`.** Long when funding is sufficiently negative, held
+24h with stops ~3x wider than the original calibration. Both changes were
+required: the 2-8h holding band is the worst on this venue (measured across 349
+profitable Hyperliquid accounts -- 53% winners, median PF 1.33, against 74% and
+2.63 at 24-72h), and every narrow-stop configuration loses. Spec:
+`docs/THESIS-funding-neg-fade.md`.
+
+**`swing` is the second lane.** Momentum continuation after a confirmed move:
+enter on a 24h move over 2%, hold 72h, 8% stop. Only ZEC survived selection --
+648 configurations were tested across 12 symbols and acceptance required
+clearing the gate in BOTH independent halves.
+
+**The cascade tracks below are Phase 2 and have NO scorecard.** The baseline
+cascade lane measured net PF 0.47 on n=826 and is cut. Do not schedule it, and
+do not treat the text below as current design -- it is retained because the
+primitives (event VWAP, OI delta, funding, BBO spread, L2 imbalance, ATR) are
+still used elsewhere.
+
+> **Superseded 2026-08-25.** The lane that is actually built, running hourly, and
 > scored against the graduation ladder is **`funding_neg_fade`**
 > (`scripts/paper_funding_neg_fade.py`): go long when funding is sufficiently
 > negative, on the thesis that negative funding pays longs to hold, so fading
@@ -265,7 +316,7 @@ Build `src/risk.py` in Week 1, before any strategy code. Every other module call
 - **Verify against the venue, not against our own capture.**
 
 ### When you change something
-- **Update the changelog** at `changelog.md` (project root) — most recent first.
+- **Update the changelog** at `docs/CHANGELOG.md` — most recent first.
 - **Update the strategy log** at `vault/strategy-log/<strategy>.md` if it's a strategy change.
 - **Update this AGENTS.md** if the change affects scope, stack, or rules.
 
@@ -279,7 +330,7 @@ Key files:
 - `gold-silver-hyperliquid.md` — vault AI context map (mirror of this file, more detail). Load order: Pillar A strategic → B strategy → C execution.
 - `notes/2026-08-01-PIVOT-btc-eth-cascade.md` — pivot rationale (active, 2026-08-01).
 - `notes/2026-08-01-DECISION-gs-strategy-build-path.md` — original decision (DEPRECATED, kept for history).
-- `changelog.md` — milestone log.
+- `docs/CHANGELOG.md` — milestone log.
 - `research/_index.md` — raw research. Active:
   - `research/2026-08-01-HYPERLIQUID-BTC-ETH-LIQUIDATION-SWEEP.md` — public sweep.
   - `research/2026-08-01-AI-MCP-CODEX-SWEEP-btc-eth-liquidation.md` — AI/MCP/Codex sweep.

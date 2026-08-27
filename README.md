@@ -6,7 +6,9 @@ Automated **BTC/ETH liquidation cascade counter-trade bot** on **Hyperliquid**.
 
 ## Status
 
-**Building** — see `AGENTS.md` for full scope and `changelog.md` for what's been done.
+**Building** — see `docs/LESSONS-AND-PLAYBOOK.md` first (measurement traps and how to use the
+tooling), then `docs/CHANGELOG.md` for what's been done. `AGENTS.md` carries
+scope and hard rules.
 
 ## Quick facts
 
