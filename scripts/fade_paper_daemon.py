@@ -70,6 +70,11 @@ STEPS = [
     # because rounding pushed risk 1.2 cents over the cap. Shares the fade
     # lane's open-positions file, so the 3-position cap is portfolio-wide.
     ("swing testnet", [PY, "scripts/swing_testnet.py", "--arm-testnet"]),
+    # Trail the stop on anything already open. Must run AFTER the entry steps
+    # so a position opened this tick is managed from the next one. Without this
+    # the bracket is fire-and-forget and a trailing exit in the backtest would
+    # be behaviour the live path never performs.
+    ("manage positions", [PY, "scripts/manage_positions.py", "--arm"]),
     ("regime labels", [PY, "scripts/label_trade_regimes.py"]),
 ]
 
